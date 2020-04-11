@@ -67,12 +67,14 @@ def tfrm(dmag_df : pd.DataFrame, tstart : np.float64, tstop : np.float64, dB = T
         
     if mean:
         stft_d = np.mean(stft_d, axis=1)
-        
-    return stft_d.reshape(1, -1)
+        stft_d.reshape(1, -1) 
 
-# -dmag_df should have columns named 'time' and 'dmag'
-# -model should be a Stochastic Gradient Descent Classifer object trained on UN-STANDARDIZED averaged transforms.
-def find_epochs(dmag_df : pd.DataFrame, model : SGDClassifier, tstart = 0, epsilon = 5):
+    return stft_d
+
+## This function is VERY expensive in time and space.
+# -- dmag_df should have columns named 'time' and 'dmag'
+# -- model should be a Stochastic Gradient Descent Classifer object trained on UN-STANDARDIZED averaged transforms.
+def find_epochs(dmag_df : pd.DataFrame, model : SGDClassifier, tstart = 0, epsilon = 30):
     # This is the list of epochs to be returned. 
     # epochs[j] = [sleep stage (0 awake/1 asleep), epoch start, epoch end]
     epochs_stages = []
