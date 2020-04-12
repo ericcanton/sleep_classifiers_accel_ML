@@ -1,11 +1,15 @@
 import numpy as np
 import pandas as pd
-import librosa as lb
+
 from scipy.signal import stft
+from scipy.signal import lombscargle as lssa
+
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDClassifier
 
 import sleep_an_tools as st
+
+from typing import Union
 
 def get_accel(subject : str, non_neg = True):
     # Import the acceleration data
@@ -23,6 +27,29 @@ def get_accel(subject : str, non_neg = True):
 
     return (accel, dmag_df)
 
+# Compute Lomb-Scargle periodogram in 30 second chunks, with 10 second overlap.
+# First time period is 20 seconds long.
+def lssa_chunks(time : np.ndarray, y : np.ndarray, max_freq = 4*np.pi/0.5): 
+    
+
+    fr = np.linspace(1e-4, max_freq + 1e-4, 500)
+
+    t_min = time.min()
+    t_max = time.max()
+
+    masks = [(t_min <= time) & (time <= t_min + 20)] + [(t_min + n*20 - 10 <= time) & (time <= t_min + (n+1)*20) for n in range(1, int((t_max - t_min)/20)-1)]
+
+    times = [time[mask] for mask in masks]
+    ys = [y[mask] for mask in masks]
+
+    lssas = [lssa(t, y, fr) for t, y in zip(times, ys)]
+
+    return (fr, lssas)
+
+# Computes the time-averaged short-term Fourier transform over 30 second segments.
+# Returns a list of lists, where stft_d[i] is the set of averaged transforms with  PSG label i. 
+# --> Current caveat: labels=[0,1], with 0 ~~> awake; 1 ~~> asleep
+# Building classifier based on this seems to suffer somewhat from rare class 0.
 def make_avg_tfrms(subject : str, dB = True, non_neg = True, labels=[0,1]):
     # Import the acceleration data
     accel = pd.read_csv("data/motion/{}_acceleration.txt".format(subject), sep=' ', names=['time', 'x', 'y', 'z'])
@@ -45,7 +72,7 @@ def make_avg_tfrms(subject : str, dB = True, non_neg = True, labels=[0,1]):
     stft_d = [[stft(dm, nperseg=128)[-1] for dm in dmag_segs[j] if len(dm) >= 128] for j in labels]
     
     if dB:
-        stft_d = [[lb.amplitude_to_db(abs(s)) for s in stft_d[j]] for j in labels]
+        stft_d = [[10*np.log10(abs(s)) for s in stft_d[j]] for j in labels]
     else:
         stft_d = [[abs(s) for s in stft_d[j]] for j in labels]
         
@@ -71,54 +98,3 @@ def tfrm(dmag_df : pd.DataFrame, tstart : np.float64, tstop : np.float64, dB = T
 
     return stft_d
 
-## This function is VERY expensive in time and space.
-# -- dmag_df should have columns named 'time' and 'dmag'
-# -- model should be a Stochastic Gradient Descent Classifer object trained on UN-STANDARDIZED averaged transforms.
-def find_epochs(dmag_df : pd.DataFrame, model : SGDClassifier, tstart = 0, epsilon = 30):
-    # This is the list of epochs to be returned. 
-    # epochs[j] = [sleep stage (0 awake/1 asleep), epoch start, epoch end]
-    epochs_stages = []
-    epochs_times = []
-
-    end_time = dmag_df['time'].max()
-
-    # Stopping point; initial transform is of dmag_df over time interval [tstart, tend]
-    tstop = tstart + epsilon
-
-    ################################################################################ 
-    # Compute STFT of dmag_df over time interval [tstart, tstop].
-    # Then, take temporal mean of this transform, standardize that vector.
-    ################################################################################ 
-    running_tfrm = tfrm(dmag_df, tstart, tstop)
-    #running_avg = np.mean(running_tfrm, axis=1)
-    #running_avg_std = (running_avg - running_avg.mean())/running_avg.std()
-
-    this_stage = next_stage = model.predict(np.mean(running_tfrm, axis=1).reshape(1, -1))
-
-    while tstop < end_time:
-        while this_stage == next_stage:
-            # Possibly this epoch stretches the remainder of the time...
-            if tstop < end_time:
-                tstop += epsilon
-            # ...if so, break to complete the process.
-            else:
-                break
-
-            # Extend the transform, compute new class. 
-            running_tfrm = np.concatenate((running_tfrm, tfrm(dmag_df, tstart, tstop)), axis=1)
-            #running_avg = np.mean(running_tfrm, axis=1)
-            #running_avg_std = (running_avg - running_avg.mean())/running_avg.std()
-            next_stage = model.predict(np.mean(running_tfrm, axis=1).reshape(1, -1))
-
-            # If next_stage != this_stage, this while exits. 
-            # Then, we should record our epoch, prepare to find next one.
-
-        # If running this code, either next_stage changed or tstop >= end_time.
-        # In either case, we want to record the epoch we just found.
-        epochs_stages += [this_stage]
-        epochs_times += [tstart]
-
-        # Reset interval to [tstop-epsilon, tstop]. 
-        tstart = tstop - epsilon
-
-    return pd.DataFrame({'time' : epochs_times, 'label' : epochs_stages})
