@@ -25,3 +25,22 @@ def vder(f : pd.DataFrame):
     w = (t1 - t0).describe()
 
     return (w, t0.to_numpy(), df.to_numpy())
+
+
+def get_accel(subject : str, non_neg = True, path = "data/motion/"):
+    # Import the acceleration data
+    accel = pd.read_csv(path = "{}_acceleration.txt".format(subject), 
+                        sep=' ', names=['time', 'x', 'y', 'z'])
+    if non_neg:
+        accel = accel[accel['time'] >= 0]
+    accel.reset_index(drop=True, inplace=True)
+    
+    # Calculate magnitude of the (x,y,z) accelerations
+    accel['mag'] = mag(accel[['x', 'y', 'z']])
+    # then calculate numerical derivative of the acceleration magnitudes.
+    tstat, t0, dmag = vder(accel[['time', 'mag']])
+
+    dmag_df = pd.DataFrame({'time' : t0, 'dmag' : dmag})
+
+    return (accel, dmag_df)
+
