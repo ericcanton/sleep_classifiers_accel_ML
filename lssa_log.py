@@ -7,13 +7,18 @@ from sklearn.linear_model import SGDClassifier
 
 # Compute Lomb-Scargle periodogram in 30 second chunks, with 10 second overlap.
 # First time period is 20 seconds long.
-def lssa_chunks(time : np.ndarray, y : np.ndarray, max_freq = 4*np.pi/0.5): 
+def lssa_chunks(time : np.ndarray, y : np.ndarray, overlap = 10, step = 20, max_freq = 4*np.pi/0.5): 
+    if step <= 0:
+        raise ValueError("step must be positive.")
+
     fr = np.linspace(1e-4, max_freq + 1e-4, 500)
 
     t_min = time.min()
     t_max = time.max()
 
-    masks = [(t_min <= time) & (time <= t_min + 20)] + [(t_min + n*20 - 10 <= time) & (time <= t_min + (n+1)*20) for n in range(1, int((t_max - t_min)/20)-1)]
+    masks = [(t_min <= time) & (time <= t_min + step)] 
+    masks += [(t_min + n*step - overlap <= time) & (time <= t_min + (n+1)*step) 
+              for n in range(1, int((t_max - t_min)/step)-1)]
 
     times = [time[mask] for mask in masks]
     ys = [y[mask] for mask in masks]

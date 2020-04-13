@@ -29,7 +29,7 @@ def vder(f : pd.DataFrame):
 
 def get_accel(subject : str, non_neg = True, path = "data/motion/"):
     # Import the acceleration data
-    accel = pd.read_csv(path = "{}_acceleration.txt".format(subject), 
+    accel = pd.read_csv(path + "{}_acceleration.txt".format(subject), \
                         sep=' ', names=['time', 'x', 'y', 'z'])
     if non_neg:
         accel = accel[accel['time'] >= 0]
