@@ -18,17 +18,11 @@ For both networks, the unscaled data provides superior precision and recall for 
 Below are the precision and recall for the Awake class for the DNN, CNN, and log regression models on a recent run. All three do fairly well for Asleep, so we do not include metrics here (you can find them in the Notebook). 
 
                 Precision   Recall
-
 DNN, unscaled   0.97        0.12
-
 DNN, scaled     0.75        0.02
-
 CNN, unscaled   0.71        0.29
-
 CNN, scaled     0.60        0.02
-
 Log, unscaled   0.21        0.52
-
 Log, scaled     0.32        0.15
 
 
