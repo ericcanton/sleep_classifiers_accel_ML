@@ -1,5 +1,3 @@
-The first Jupyter Notebook, intended to be run on Google Colab, 
-
 1. <code>stft_no_avg.ipynb</code> expects to be run on Google Colab, but you can find a link to the hosted Notebook in the first paragraph of this notebook. This notebook imports a pickled numpy 3-tensor whose axis-0 cross-sections are spectrograms of ~2.56 second windows of accelerometer derivatives; links to these data files on my Google Drive are included in the Notebook. 
 
 I build two neural networks to classify the STFTs, which are interpreted more-or-less as black-and-white images. I also explore the change in classification capability when the NumPy arrays representing the STFTs have been normalized to have values in the interval [0, 255]; the normalization interval is chosen based on the usual intensity values for black-and-white images. 

@@ -91,29 +91,26 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
         return None
 
     # Adjust length_of_window slightly so that 128 divides (length_of_window/0.02)
-    # This becomes important when we're applying STFT to our windows, assuming sampling at 50Hz.
+    # This becomes important when we're applying STFT to our windows, assuming sampling at 50Hz (0.02 second gaps).
     #   (More info below)
-    length_of_window = 0.02*int(length_of_window/0.02) 
+    length_of_window = 0.02*int(length_of_window/0.02) # Make length_of_window an integer multiple of 0.02
     overflow = int(length_of_window / 0.02) % 128
-    length_of_window = length_of_window + 0.02*(128 - overflow)
-
-    time_window_base = np.arange(0, length_of_window, 0.02)
+    length_of_window = length_of_window + 0.02*(128 - overflow) # Now (length_of_window/0.02) % 128 == 0
 
     # Determine the number of windows we'll be making. 
     # One window per PSG labeled 30-second window
-    n_wins = sum([len(p)-1 for p in list_of_psgs])
+    n_wins = sum([len(p) for p in list_of_psgs])
     win_radius = length_of_window/2
 
-    print("The two numbers below should be equal.")
-    print("n_wins : {}".format(n_wins))
-    dmags_win = np.zeros((n_wins, 4500))
-    labels_win = np.zeros(n_wins)
-    times = np.zeros(2*n_wins)
+    # Set up tensors
+    dmags_win = np.zeros((n_wins, int(length_of_window/0.02))) # windowed dmags
+    labels_win = np.zeros(n_wins) # labels; modify with "-2" class if insufficient sampling in window
+    time_window_base = np.arange(0, length_of_window, 0.02) # sliding time window
     
-    # Need an absolute counter to make dmag tensor
+    # Counter for axis-0 index of tensors
     count = 0
 
-    # Zip together the list of dmags and psg labellings
+    # Zip together the lists of dmags and psg 
     for d, p in zip(list_of_dmags, list_of_psgs):
         # Now iterate over times t and labels l
         for t, l in p:
@@ -152,10 +149,9 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     labels_win = labels_win[labels_win != -2]
 
     # Take STFT in segments of 128 points (2.65 seconds @ 50Hz)
-    # Then boost this with amplitude_to_db, approx. 20*np.log10(../ref) but good with 0s.
-    spectro_win = amplitude_to_db(np.abs(stft(dmags_win, fs=50, nperseg=128)))
+    # Then boost this with amplitude_to_db, approx. 10*np.log10(../ref) but good with 0s.
+    spectro_win = amplitude_to_db(np.abs(stft(dmags_win, fs=50, nperseg=128)[-1]))
 
-    print("windows done: %d" % count)
     return (labels_win, dmags_win, spectro_win)
 
 if __name__ == "__main__":
@@ -191,13 +187,6 @@ if __name__ == "__main__":
 #        print("Alternatively, call ", script_name, " again with -f to force.")
 #        exit()
 
-    if "--train" in sys.argv:
-        training_set = float(sys.argv[sys.argv.index("--train")])
-    elif "--test" in sys.argv:
-        training_set = 1 - float(sys.argv[sys.argv.index("--test")])
-    else:
-        training_set = 0.2
-
     # Load the data 
     sub_data = []
     psg_data = []
@@ -228,12 +217,19 @@ if __name__ == "__main__":
     print("(%9.4f) Tensors for neural network created..."% (now - start))
 
     try:
-        output_dir = "../data/stft"
+        output_dir = "../data/spectros"
         os.mkdir(output_dir)
     except:
-        print(output_dir, " exists...")
+        print("\t", output_dir, " exists...")
 
     if "--split-subs" in sys.argv:
+        if "--train" in sys.argv:
+            training_set = float(sys.argv[sys.argv.index("--train")])
+        elif "--test" in sys.argv:
+            training_set = 1 - float(sys.argv[sys.argv.index("--test")])
+        else:
+            training_set = 0.2
+
         labels_win_train, labels_win_test, spectro_win_train, spectro_win_test, dmags_win_test, dmags_win_train, \
                 = tts(labels_win, dmags_win, spectro_win, training_size = training_set)
 
@@ -250,7 +246,7 @@ if __name__ == "__main__":
                 file_start = time.time()
                 dump(fname[1], f)
                 now = time.time()
-                print(fname[0], " written (took %9.4f seconds)..." % (now - file_start))
+                print("(%9.4f) " + fname[0] + " written (took %9.4f seconds)..." % (now - start, now - file_start))
 
     else:
         files = [("labels.pickle", labels_win), ("dmags.pickle", dmags_win), ("spectro.pickle", spectro_win)]
