@@ -24,7 +24,7 @@ If called as a script, accepts the following options:
 
 
 
-    "--split-subs"  train/test split on level of subjects (vs dmag windows)
+    "--split"  train/test split on level of subjects (vs dmag windows)
                       * should be accompanied by "--train" or "--test"
     The following two options only relevant if "--split-subs" passed
     "--train"       size of training set. A float in (0, 1)
@@ -111,9 +111,16 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     count = 0
 
     # Zip together the lists of dmags and psg 
+    len_of_dmags = len(list_of_dmags)
+    dmag_counter = 0
     for d, p in zip(list_of_dmags, list_of_psgs):
+        dmag_counter += 1
         # Now iterate over times t and labels l
+        N = len(p)
+        inner_count = 0
         for t, l in p:
+            inner_count += 1
+            #print("  %d of %d is %3.2f" % (dmag_counter, len_of_dmags, 100*(inner_count/N)) + "% complete")
             # t+15 is in the middle of 30s interval
             #    t_start/end = (t+15) +/- win_radius 
             # gives a window of length (length_of_window) centered at t+15.
@@ -143,6 +150,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     
             # Another window and interpolation done. Increase the counter.
             count += 1
+        print("%d of %d done..." % (dmag_counter, len_of_dmags))
 
     # Filter out those intervals we skipped and marked label as -2. 
     dmags_win = dmags_win[labels_win != -2]
@@ -150,6 +158,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
 
     # Take STFT in segments of 128 points (2.65 seconds @ 50Hz)
     # Then boost this with amplitude_to_db, approx. 10*np.log10(../ref) but good with 0s.
+    print("Working on spectrograms now...")
     spectro_win = amplitude_to_db(np.abs(stft(dmags_win, fs=50, nperseg=128)[-1]))
 
     return (labels_win, dmags_win, spectro_win)
@@ -213,50 +222,77 @@ if __name__ == "__main__":
     dmags = [num_der(mag(s)) for s in sub_data]
     now = time.time()
     print("(%9.4f) dmags calculated..."% (now - start))
-    labels_win, dmags_win, spectro_win = make_stft_tensor(dmags, psg_data)
-    print("(%9.4f) Tensors for neural network created..."% (now - start))
 
-    try:
-        output_dir = "../data/spectros"
-        os.mkdir(output_dir)
-    except:
-        print("\t", output_dir, " exists...")
+    if "--split" in sys.argv:
+        now = time.time()
+        print("(%9.4f) Doing train/test split on subjects BEFORE spectrograms..." % (now - start))
+        try:
+            if "--train" in sys.argv:
+                training_size = float(sys.argv[sys.argv.index("--train")+1])
+            elif "--test" in sys.argv:
+                training_size = 1 - float(sys.argv[sys.argv.index("--test")+1])
+            else:
+                training_size = 0.8
+        except:
+            training_size = 0.8
+        print("training size = %f" % training_size)
 
-    if "--split-subs" in sys.argv:
-        if "--train" in sys.argv:
-            training_set = float(sys.argv[sys.argv.index("--train")])
-        elif "--test" in sys.argv:
-            training_set = 1 - float(sys.argv[sys.argv.index("--test")])
-        else:
-            training_set = 0.2
+        dmags_train, dmags_test, psg_train, psg_test = tts(dmags, psg_data, train_size=training_size)
 
-        labels_win_train, labels_win_test, spectro_win_train, spectro_win_test, dmags_win_test, dmags_win_train, \
-                = tts(labels_win, dmags_win, spectro_win, training_size = training_set)
 
-        files = [("labels_train.pickle", labels_win_train), \
-                ("labels_test.pickle", labels_win_test), \
-                ("spectro_train.pickle", spectro_win_train), \
-                ("spectro_test.pickle", spectro_win_test), \
-                ("dmags_test.pickle", dmags_win_test), \
-                ("dmags_train.pickle", dmags_win_train)]
+        psg_train_win, dmags_train_win, spectro_train_win = make_stft_tensor(dmags_train, psg_train)
+        now = time.time()
+        print("(%9.4f) Training tensors for neural network created..."% (now - start))
 
-        
-        for fname in files:
-            with open(ouput_dir + fname[0], "wb") as f:
-                file_start = time.time()
-                dump(fname[1], f)
-                now = time.time()
-                print("(%9.4f) " + fname[0] + " written (took %9.4f seconds)..." % (now - start, now - file_start))
+
+
+        psg_test_win, dmags_test_win, spectro_test_win = make_stft_tensor(dmags_test, psg_test)
+        now = time.time()
+        print("(%9.4f) Testing tensors for neural network created..."% (now - start))
+
+        now = time.time()
+        print("(%9.4f) Dumping spectrogram pickles..."% (now - start))
+        with open("spectros_train.pickle", "wb") as f:
+            pickle.dump(spectro_train_win, f)
+        with open("spectros_test.pickle", "wb") as f:
+            pickle.dump(spectro_test_win, f)
+
+        now = time.time()
+        print("(%9.4f) Dumping windowed dmag pickles..."% (now - start))
+        with open("dmags_train.pickle", "wb") as f:
+            pickle.dump(dmags_train_win, f)
+        with open("dmags_test.pickle", "wb") as f:
+            pickle.dump(dmags_test_win, f)
+
+        now = time.time()
+        print("(%9.4f) Dumping PSG pickles..."% (now - start))
+        with open("psg_train.pickle", "wb") as f:
+            pickle.dump(psg_train_win, f)
+        with open("psg_test.pickle", "wb") as f:
+            pickle.dump(psg_test_win, f)
 
     else:
-        files = [("labels.pickle", labels_win), ("dmags.pickle", dmags_win), ("spectro.pickle", spectro_win)]
-        
-        for fname in files:
-            with open(ouput_dir + fname[0], "wb") as f:
-                file_start = time.time()
-                dump(fname[1], f)
-                now = time.time()
-                print(fname[0], " written (took %9.4f seconds)...\n" % (now - file_start))
+        now = time.time()
+        print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
+
+        psg_win, dmags_win, spectro_win = make_stft_tensor(dmags, psg_data)
+        now = time.time()
+        print("(%9.4f) Tensors for neural network created..."% (now - start))
+
+        now = time.time()
+        print("(%9.4f) Dumping spectrogram pickle..."% (now - start))
+        with open(output_dir + "spectros.pickle", "wb") as f:
+            pickle.dump(spectro_win, f)
+
+        now = time.time()
+        print("(%9.4f) Dumping windowed dmag pickle..."% (now - start))
+        with open(output_dir + "dmags.pickle", "wb") as f:
+            pickle.dump(dmags_win, f)
+
+        now = time.time()
+        print("(%9.4f) Dumping PSG pickle..."% (now - start))
+        with open(output_dir + "psg.pickle", "wb") as f:
+            pickle.dump(psg_win, f)
 
     now = time.time()
     print("(%9.4f) Complete!\n" % (now - start))
