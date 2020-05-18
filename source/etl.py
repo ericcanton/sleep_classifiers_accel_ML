@@ -10,26 +10,28 @@ the other holding polysomnography (PSG) labeled time windows, and returns numpy 
  1. one 3-tensor holding spectrograms of windowed dmag stacked along axis 0, 
  2. one 2-tensor holding the dmag windows (after interpolation) along axis 0,
  3. one 2-tensor holding the label of the windows. 
+ 4. one 2-tensor holding a time stamp from the middle of each window (only if --with-time)
 Note that the length of the returned labels tensor need not match the input,
 since we throw out labeled PSG times whose corresponding dmag windows have
 too few samples (below 25 Hz) to be included. 
 
 If called as a script, accepts the following options:
-    "--len"         length of dmag windows. A positive float, optional.
+    --len           length of dmag windows. A positive float, optional.
 
 
-
-    "--force" 
-     or "-f"        force overwrite of existing data file
-
-
-
-    "--split"  train/test split on level of subjects (vs dmag windows)
+    --split         train/test split on level of subjects (vs dmag windows)
                       * should be accompanied by "--train" or "--test"
-    The following two options only relevant if "--split-subs" passed
-    "--train"       size of training set. A float in (0, 1)
-    "--test"        size of testing set. A float in (0, 1)
-    
+The following two options only relevant if "--split-subs" passed
+    --train         size of training set. A float in (0, 1)
+    --test          size of testing set. A float in (0, 1)
+
+Finally, should you want to include a more explicit time component 
+to the spectrogram windows, pass the flag 
+
+    --with-time 
+
+This outputs additional pickled numpy arrays, with shape (N,1) for spectrogram 
+tensors with shape (N, 65, m). 
 
 """
 ##################################################
@@ -66,14 +68,15 @@ def num_der(fn : np.array) -> np.array:
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ### Primary data processor ###
-# Goal: take two lists of numpy 2-tensors, produce two numpy tensors:
-#  1. first, stack of spectrograms, has shape (N, 129, q) where....
+# Goal: take two lists of numpy 2-tensors, produce three numpy tensors:
+#  1. first, stack of spectrograms, has shape (N, 65, m) where....
 #   ... N = total number of windows in all dmags with sufficient sampling frequency
 #           (determined during processing)
-#   ... 129 = 1 + 128 are frequencies in the moving power spectrum. 
-#   ... q = number of (2.56 = 0.02*128)-second long intervals fitting into specified window length.
-#   n.b.: (129, q) is the shape of scipy.signal.stft(dmag[window], nperseg=128).
+#   ... 65 = 1 + 64 are frequencies in the moving power spectrum. 
+#   ... m = number of (2.56 = 0.02*128)-second long intervals fitting into specified window length.
+#   n.b.: (65, m) is the shape of scipy.signal.stft(dmag[window], nperseg=128).
 #  2. second, shape (N, 1), is PSG labels. 
+#  3. third, shape (N, length_of_window/0.2) with rows corresponding to the window times
 # 
 # Basic plan: 
 #   - Prepare windows
@@ -171,30 +174,12 @@ if __name__ == "__main__":
     from joblib import dump
     import time
 
-    script_name = sys.argv[0]
-    print(script_name, " running in script mode!")
+    print(sys.argv[0], " running in script mode!")
 
     if "--len" in sys.argv:
         window_length = int(sys.argv[sys.argv.index("--len")+1])
     else:
         window_length = 90
-
-#    # Fatal issue: refuse to overwrite previous outputs
-#    spectro_out = "stfts_"+ str(window_len) + ".pickle."
-#    label_out = "labels_"+ str(window_len) + ".pickle"
-#
-#    is_fatal = (isfile(spectro_out) or isfile(label_out))
-#    is_fatal = is_fatal and ("-f" not in sys.argv) and ("--force" not in sys.argv)
-#
-#    if fatal:
-#        print(spectro_out, " already exists. Move and re-run ", script_name)
-#        print("Alternatively, call ", script_name, " again with -f to force.")
-#        exit()
-#
-#    if isfile(spectro_out) and ("-f" not in sys.argv) and ("--force" not in sys.argv):
-#        print(spectro_out, " already exists. Move and re-run ", script_name)
-#        print("Alternatively, call ", script_name, " again with -f to force.")
-#        exit()
 
     # Load the data 
     sub_data = []
