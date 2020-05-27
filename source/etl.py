@@ -176,11 +176,11 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     
             time = time_window_base + t_start
 
-            dmags_win[count, :] += np.interp(time, this_d[:,0], this_d[:,1])
+            dmags_win[count, :] = np.interp(time, this_d[:,0], this_d[:,1])
             labels_win[count] = l
 
             if with_time:
-                time_win[count, :] += np.array([t_start, t+15, t_end])
+                time_win[count, :] = np.array([t_start, t+15, t_end])
     
             # Another window and interpolation done. Increase the counter.
             count += 1
@@ -195,7 +195,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     if with_time:
         time_win = time_win[keep]
 
-    # Take STFT in segments of 128 points (2.65 seconds @ 50Hz)
+    # Take STFT in segments of 128 points (2.56 seconds @ 50Hz)
     # Then boost this with amplitude_to_db, approx. 10*np.log10(../ref) but good with 0s.
     print("Working on spectrograms now...")
     spectro_win = amplitude_to_db(np.abs(stft(dmags_win, fs=50, nperseg=128)[-1]))
@@ -207,7 +207,24 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
         return (spectro_win, labels_win, dmags_win)
 
 if __name__ == "__main__":
+    # If the user just wants "--help" or "-h" print some and exit!
     import sys
+    if ("--help" in sys.argv) or ("-h" in sys.argv):
+        print("""
+Arguments:
+  --len         specify window length
+  --split       train/test split on subjects, default 80/20 (24 test/7 train)
+  --with-time   output also start/mid/end times of the windows
+  --help, -h    output this help message and exit
+
+ If --split is passed, we have two other options (otherwise ignored)
+  --train 0.x   float in [0, 1], size of training split, default 0.8
+  --test 0.x    same as train, but specify test size instead, default 0.2
+""")
+        exit()
+
+
+
     from sklearn.model_selection import train_test_split as tts
     from os.path import isfile, isdir
     from os import mkdir
@@ -251,6 +268,7 @@ if __name__ == "__main__":
     if "--split" in sys.argv:
         now = time.time()
         print("(%9.4f) Doing train/test split on subjects BEFORE spectrograms..." % (now - start))
+
         try:
             if "--train" in sys.argv:
                 training_size = float(sys.argv[sys.argv.index("--train")+1])
@@ -260,13 +278,18 @@ if __name__ == "__main__":
                 training_size = 0.8
         except:
             training_size = 0.8
-        print("training size = %f" % training_size)
+        print("training size = %3.2f" % training_size)
 
         dmags_train, dmags_test, psg_train, psg_test = tts(dmags, psg_data, train_size=training_size)
+        now = time.time()
+        print("(%9.4f) Sample splits drawn..." % (now - start))
 
 
+        ##################################################
+        ### Training split
+        ##################################################
         if "--with-time" in sys.argv:
-            spectro_train_win, psg_train_win, dmags_train_win, time_train_win = make_stft_tensor(dmags_train, psg_train)
+            spectro_train_win, psg_train_win, dmags_train_win, time_train_win = make_stft_tensor(dmags_train, psg_train, with_time = True)
         else:
             spectro_train_win, psg_train_win, dmags_train_win = make_stft_tensor(dmags_train, psg_train)
         now = time.time()
@@ -274,13 +297,20 @@ if __name__ == "__main__":
 
 
 
+        ##################################################
+        ### Testing split
+        ##################################################
         if "--with-time" in sys.argv:
-            spectro_test_win, psg_test_win, dmags_test_win, time_test_win = make_stft_tensor(dmags_test, psg_test)
+            spectro_test_win, psg_test_win, dmags_test_win, time_test_win = make_stft_tensor(dmags_test, psg_test, with_time = True)
         else:
             spectro_test_win, psg_test_win, dmags_test_win = make_stft_tensor(dmags_test, psg_test)
         now = time.time()
         print("(%9.4f) Testing tensors for neural network created..."% (now - start))
 
+    
+        ##################################################
+        ### Write the arrays to disk
+        ##################################################
         now = time.time()
         print("(%9.4f) Dumping spectrogram pickles..."% (now - start))
         with open("spectros_train.pickle", "wb") as f:
@@ -311,6 +341,10 @@ if __name__ == "__main__":
             with open("time_test.pickle", "wb") as f:
                 pickle.dump(time_test_win, f)
 
+    
+    ##################################################
+    ### Same as the "--split" case, but simpler
+    ##################################################
     else:
         now = time.time()
         print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
