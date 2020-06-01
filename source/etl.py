@@ -361,7 +361,7 @@ Arguments:
             output_dir = "../data/pickles/%s/" % n
 
             if not isdir(output_dir):
-                os.mkdir(output_dir)
+                os.makedirs(output_dir, exist_ok=True)
 
             now = time.time()
             print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
