@@ -1,5 +1,5 @@
 """
-ETL scripts/functions for the sleep_classifiers_ML project.
+ETL and feature extraction functions for the sleep_classifiers_ML project.
 
 Starts with some very short functions loading data from CSV into numpy arrays,
 taking magnitude of (x,y,z) coordinates, and taking numerical derivatives. 
@@ -18,10 +18,8 @@ too few samples (below 25 Hz) to be included.
 
 If called as a script, accepts the following options:
     --len           length of dmag windows. A positive float, optional.
-
-
+    --sep           do each subject separately, store in folders in ../data/pickles/
     --split         train/test split on level of subjects (vs dmag windows)
-                      * should be accompanied by "--train" or "--test"
 The following two options only relevant if "--split-subs" passed
     --train         size of training set. A float in (0, 1)
     --test          size of testing set. A float in (0, 1)
@@ -92,13 +90,14 @@ def num_der(fn : np.array) -> np.array:
    --- interpolate dmags in windows indexed by psg windows
    - Take stft of dmags
 """
-def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window = 90.0, with_time = False) -> list:
+def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window = 90.0, with_time = True) -> list:
+    with_time = True
     if len(list_of_dmags) != len(list_of_psgs):
-        raise IndexError("list_of_dmags must have the same length as list_of_psgs")
+        raise IndexError("list_of_dmags and list_of_psgs must have the same length.\nReturning None!")
         return None
     # Window length must be positive
     if length_of_window <= 0:
-        raise ValueError("length_of_window must be > 0.")
+        raise ValueError("length_of_window must be > 0.\nReturning None!")
         return None
 
     
@@ -112,7 +111,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     overflow = int(length_of_window / 0.02) % 128
     length_of_window = length_of_window + 0.02*(128 - overflow) # Now (length_of_window/0.02) % 128 == 0
 
-    # Determine the number of windows we'll be making. 
+    # Determine the number of windows we'll be making per-person. 
     # One window per PSG labeled 30-second window
     n_wins = sum([len(p) for p in list_of_psgs])
     win_radius = length_of_window/2
@@ -125,18 +124,22 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     time_window_base = np.arange(0, length_of_window, 0.02) # sliding time window
     
     if with_time:
-        time_win = np.zeros((n_wins, 3))
+        time_win = np.zeros(n_wins)
 
 
+    """
     ##################################################
     ### Window calculation/stacking loop
     ##################################################
-    # Counter for axis-0 index of tensors
+    Counter for axis-0 index of tensors
+    """
     count = 0
+
+    dmag_counter = 0
 
     # Zip together the lists of dmags and psg 
     len_of_dmags = len(list_of_dmags)
-    dmag_counter = 0
+
     for d, p in zip(list_of_dmags, list_of_psgs):
         dmag_counter += 1
         # Now iterate over times t and labels l
@@ -146,10 +149,10 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
             inner_count += 1
             #print("  %d of %d is %3.2f" % (dmag_counter, len_of_dmags, 100*(inner_count/N)) + "% complete")
 
+            """
             ##################################################
             ### Get the window of dmag referenced by PSG
             ##################################################
-            """
             t+15 is in the middle of 30s interval
                t_start/end = (t+15) +/- win_radius 
             gives a window of length (length_of_window) centered at t+15.
@@ -180,7 +183,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
             labels_win[count] = l
 
             if with_time:
-                time_win[count, :] = np.array([t_start, t+15, t_end])
+                time_win[count] = t+15
     
             # Another window and interpolation done. Increase the counter.
             count += 1
@@ -188,8 +191,8 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
         # back to:       for d, p in zip(list_of_dmags, list_of_psgs)
         print("%d of %d done..." % (dmag_counter, len_of_dmags))
 
-    # Filter out those intervals we skipped and marked label as -2. 
-    keep = labels_win != -2
+    # Filter out those intervals with labels -1 (unscored) or -2 (those we skipped)
+    keep = (labels_win >= 0)
     dmags_win = dmags_win[keep]
     labels_win = labels_win[keep]
     if with_time:
@@ -214,6 +217,7 @@ if __name__ == "__main__":
 Arguments:
   --len         specify window length
   --split       train/test split on subjects, default 80/20 (24 test/7 train)
+  --sep         make separate pickles for each subject in the study
   --with-time   output also start/mid/end times of the windows
   --help, -h    output this help message and exit
 
@@ -225,9 +229,9 @@ Arguments:
 
 
 
-    from sklearn.model_selection import train_test_split as tts
+    from sklearn.model_selection import train_test_split
     from os.path import isfile, isdir
-    from os import mkdir
+    import os 
     from joblib import dump
     import time
 
@@ -243,6 +247,7 @@ Arguments:
     psg_data = []
     count = 0
     start = time.time()
+    names = []
     for g in glob.glob("../data/motion/*.txt"):
         count += 1
 
@@ -258,6 +263,7 @@ Arguments:
 
         sub_data.append(load(g))
         psg_data.append(load("../data/labels/" + labels))
+        names.append(number)
         now = time.time()
         print("(%9.4f) Accelerometer and PSG data loaded...\n" % (now - start))
 
@@ -280,7 +286,7 @@ Arguments:
             training_size = 0.8
         print("training size = %3.2f" % training_size)
 
-        dmags_train, dmags_test, psg_train, psg_test = tts(dmags, psg_data, train_size=training_size)
+        dmags_train, dmags_test, psg_train, psg_test = train_test_split(dmags, psg_data, train_size=training_size)
         now = time.time()
         print("(%9.4f) Sample splits drawn..." % (now - start))
 
@@ -289,9 +295,10 @@ Arguments:
         ### Training split
         ##################################################
         if "--with-time" in sys.argv:
-            spectro_train_win, psg_train_win, dmags_train_win, time_train_win = make_stft_tensor(dmags_train, psg_train, with_time = True)
+            with_time = True
         else:
-            spectro_train_win, psg_train_win, dmags_train_win = make_stft_tensor(dmags_train, psg_train)
+            with_time = False
+        spectro_train_win, psg_train_win, dmags_train_win, time_train_win = make_stft_tensor(dmags_train, psg_train)
         now = time.time()
         print("(%9.4f) Training tensors for neural network created..."% (now - start))
 
@@ -300,10 +307,7 @@ Arguments:
         ##################################################
         ### Testing split
         ##################################################
-        if "--with-time" in sys.argv:
-            spectro_test_win, psg_test_win, dmags_test_win, time_test_win = make_stft_tensor(dmags_test, psg_test, with_time = True)
-        else:
-            spectro_test_win, psg_test_win, dmags_test_win = make_stft_tensor(dmags_test, psg_test)
+        spectro_test_win, psg_test_win, dmags_test_win, time_test_win = make_stft_tensor(dmags_test, psg_test, with_time = True)
         now = time.time()
         print("(%9.4f) Testing tensors for neural network created..."% (now - start))
 
@@ -345,12 +349,56 @@ Arguments:
     ##################################################
     ### Same as the "--split" case, but simpler
     ##################################################
+    elif "--sep" in sys.argv:
+        if "--with-time" in sys.argv:
+            with_time = True
+        else:
+            with_time = False
+
+        for i, n in enumerate(names):
+            output_dir = "../data/pickles/%s/" % n
+
+            if not isdir(output_dir):
+                os.mkdir(output_dir)
+
+            now = time.time()
+            print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
+            try:
+                dmags_win, psg_win, spectro_win, time_win = make_stft_tensor([dmags[i]], [psg_data[i]], with_time = with_time)
+            except:
+                print("There was an issue with %s. Continuing." % n)
+                continue
+
+            now = time.time()
+            print("(%9.4f) Tensors for neural network created..."% (now - start))
+
+            now = time.time()
+            print("(%9.4f) Dumping spectrogram pickle for %s..."% (now - start, n))
+            with open(output_dir + "spectros.pickle", "wb") as f:
+                pickle.dump(spectro_win, f)
+
+            now = time.time()
+            print("(%9.4f) Dumping PSG pickle for %s..."% (now - start, n))
+            with open(output_dir + "psg.pickle", "wb") as f:
+                pickle.dump(psg_win, f)
+    
+            now = time.time()
+            print("(%9.4f) Dumping windowed dmag pickle for %s..."% (now - start, n))
+            with open(output_dir + "dmags.pickle", "wb") as f:
+                pickle.dump(dmags_win, f)
+    
+            if "--with-time" in sys.argv:
+                now = time.time()
+                print("(%9.4f) Dumping time pickle for %s..."% (now - start, n))
+                with open(output_dir + "time.pickle", "wb") as f:
+                    pickle.dump(time_win, f)
+
     else:
         now = time.time()
         print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
 
         if "--with-time" in sys.argv:
-            dmags_win, psg_win, spectro_win, time_win = make_stft_tensor(dmags, psg_data)
+            dmags_win, psg_win, spectro_win, time_win = make_stft_tensor(dmags, psg_data, with_time = True)
         else:
             dmags_win, psg_win, spectro_win = make_stft_tensor(dmags, psg_data)
         now = time.time()
@@ -358,23 +406,23 @@ Arguments:
 
         now = time.time()
         print("(%9.4f) Dumping spectrogram pickle..."% (now - start))
-        with open(output_dir + "spectros.pickle", "wb") as f:
+        with open( "spectros.pickle", "wb") as f:
             pickle.dump(spectro_win, f)
 
         now = time.time()
         print("(%9.4f) Dumping PSG pickle..."% (now - start))
-        with open(output_dir + "psg.pickle", "wb") as f:
+        with open( "psg.pickle", "wb") as f:
             pickle.dump(psg_win, f)
 
         now = time.time()
         print("(%9.4f) Dumping windowed dmag pickle..."% (now - start))
-        with open(output_dir + "dmags.pickle", "wb") as f:
+        with open( "dmags.pickle", "wb") as f:
             pickle.dump(dmags_win, f)
 
         if "--with-time" in sys.argv:
             now = time.time()
             print("(%9.4f) Dumping time pickle..."% (now - start))
-            with open(output_dir + "time.pickle", "wb") as f:
+            with open( "time.pickle", "wb") as f:
                 pickle.dump(time_win, f)
 
 
