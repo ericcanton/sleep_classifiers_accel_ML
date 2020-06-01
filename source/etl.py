@@ -366,7 +366,7 @@ Arguments:
             now = time.time()
             print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
             try:
-                spectro_win, labels_win, dmags_win, time_win = make_stft_tensor([dmags[i]], [psg_data[i]], with_time = with_time)
+                spectro_win, psg_win, dmags_win, time_win = make_stft_tensor([dmags[i]], [psg_data[i]], with_time = with_time)
             except:
                 print("There was an issue with %s. Continuing." % n)
                 failed.append(n)
@@ -385,16 +385,18 @@ Arguments:
             with open(output_dir + "psg.pickle", "wb") as f:
                 pickle.dump(psg_win, f)
     
-            now = time.time()
-            print("(%9.4f) Dumping windowed dmag pickle for %s..."% (now - start, n))
-            with open(output_dir + "dmags.pickle", "wb") as f:
-                pickle.dump(dmags_win, f)
+            if "--with-dmags" in sys.argv:
+                now = time.time()
+                print("(%9.4f) Dumping windowed dmag pickle for %s..."% (now - start, n))
+                with open(output_dir + "dmags.pickle", "wb") as f:
+                    pickle.dump(dmags_win, f)
     
-            if "--with-time" in sys.argv:
+            if with-time:
                 now = time.time()
                 print("(%9.4f) Dumping time pickle for %s..."% (now - start, n))
                 with open(output_dir + "time.pickle", "wb") as f:
                     pickle.dump(time_win, f)
+
         if len(failed) > 0:
             print("We failed to compute the following subjects' spectrograms:\n", failed)
         else:
