@@ -91,6 +91,7 @@ def num_der(fn : np.array) -> np.array:
    - Take stft of dmags
 """
 def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window = 90.0, with_time = True) -> list:
+    print("Working inside make_stft_tensor now...")
     with_time = True
     if len(list_of_dmags) != len(list_of_psgs):
         raise IndexError("list_of_dmags and list_of_psgs must have the same length.\nReturning None!")
@@ -350,6 +351,7 @@ Arguments:
     ### Same as the "--split" case, but simpler
     ##################################################
     elif "--sep" in sys.argv:
+        failed = []
         if "--with-time" in sys.argv:
             with_time = True
         else:
@@ -364,9 +366,10 @@ Arguments:
             now = time.time()
             print("(%9.4f) Calculating windows and spectrograms..." % (now - start))
             try:
-                dmags_win, psg_win, spectro_win, time_win = make_stft_tensor([dmags[i]], [psg_data[i]], with_time = with_time)
+                spectro_win, labels_win, dmags_win, time_win = make_stft_tensor([dmags[i]], [psg_data[i]], with_time = with_time)
             except:
                 print("There was an issue with %s. Continuing." % n)
+                failed.append(n)
                 continue
 
             now = time.time()
@@ -392,6 +395,10 @@ Arguments:
                 print("(%9.4f) Dumping time pickle for %s..."% (now - start, n))
                 with open(output_dir + "time.pickle", "wb") as f:
                     pickle.dump(time_win, f)
+        if len(failed) > 0:
+            print("We failed to compute the following subjects' spectrograms:\n", failed)
+        else:
+            print("All spectrograms created successfully!")
 
     else:
         now = time.time()
