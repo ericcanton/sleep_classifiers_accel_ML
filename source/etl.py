@@ -391,7 +391,7 @@ Arguments:
                 with open(output_dir + "dmags.pickle", "wb") as f:
                     pickle.dump(dmags_win, f)
     
-            if with-time:
+            if with_time:
                 now = time.time()
                 print("(%9.4f) Dumping time pickle for %s..."% (now - start, n))
                 with open(output_dir + "time.pickle", "wb") as f:
