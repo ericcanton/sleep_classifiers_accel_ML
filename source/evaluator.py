@@ -1,3 +1,12 @@
+""" 
+Evaluation scripts. There are four functions defined here:
+    1. logits_to_proba @ line 34
+    2. data_yielder @ line 42
+    3. split_yielder @ line  92
+    4. pr_roc_from_path @ line 145
+    5. sample_pics @ line 279
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
@@ -49,8 +58,10 @@ def data_yielder(data_path, exclude = None, nn = True, nn_base_name = None):
     if nn_base_name == None:
         nn_base_name = "_trained_cnn.h5"
         
-    # os.walk[0] is the top-level directory. This is where the
-    # by-subject pickle folders should be.
+    # next(os.walk)[0] is the top-level directory. 
+    # This is where the by-subject pickle folders should be.
+    # next(os.walk)[1] is the list of files in next(os.walk)[0] 
+    #   (not folders, which is next(os.walk)[2])
     list_of_subjects = next(os.walk(pickle_path))[1]
     list_of_subjects = [s for s in list_of_subjects if s not in exclude]
 
@@ -72,7 +83,7 @@ def data_yielder(data_path, exclude = None, nn = True, nn_base_name = None):
             yield list_of_subjects[i], spectros[i], time[i], psg[i]
         
 # See data_yielder for an explanation of the parameters.
-# Yields: (subject number exclude from training, training_split_data, testing_split_data)
+# Yields: (subject number excluded from training split, training_split_data, testing_split_data)
 ## Where:
 # training_split_data:
 #   [0] if with_time, a 2-tuple:
@@ -113,7 +124,7 @@ def split_yielder(data_path = None, exclude = None, with_time = True):
         yield (d[0], training_split_data, testing_split_data)
       
 """
-TODO: use pr_roc function instead of repeating code here
+TODO(ericcanton): use pr_roc function instead of repeating code here
 Parameters:
     * data_yielder should be a generator or list that produces tuples of the form:
     ~~~ (subject name, spectrogram data, time data, PSG label data, neural network)
@@ -131,7 +142,7 @@ Parameters:
 Returns:
     * (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
 """
-def pr_roc_from_list(data_yielder, title=None, pos_label=0, label_names : dict=None, saveto=None, axis=None, mode="roc", from_logits = True):
+def pr_roc_from_path(data_yielder, title=None, pos_label=0, label_names : dict=None, saveto=None, axis=None, mode="roc", from_logits = True):
     if mode not in ['pr', 'roc']:
         raise ValueError("mode must be in ['pr', 'roc'].")
 
@@ -242,9 +253,15 @@ def pr_roc_from_list(data_yielder, title=None, pos_label=0, label_names : dict=N
     return_message = """
 Returning: 3-tuple with elements [i]: 
     [0] length-{} list of subjects whose complementary NN gives no empty classes
-    [1] length-{} list of numpy tensors with class probabilities, each of shape (*, 2)
-    [2] 2-tuple of numpy arrays of interpolated (FPR, TPR) or (recall, precision)
-        each with shape {}""".format(len(succeeded), len(evaluations), tpr_interpolated.shape)
+    [1] length-{} list of numpy tensors with class probabilities, shape {}
+    [2] 2-tuple {} of interpolated numpy arrays, 
+          first with shape {} 
+          second with shape {}""" .format( \
+                len(succeeded), \
+                len(evaluations), \
+                len(evaluations[0]), \
+                "(FPR, TPR)" if mode == 'roc' else "(recall, precision)", \
+                tpr_interpolated.shape)
 
     print(return_message)
     return (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
