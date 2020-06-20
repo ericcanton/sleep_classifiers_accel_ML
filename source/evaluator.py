@@ -2,196 +2,366 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 
+import tensorflow as tf
+
 from sklearn.metrics import roc_curve, precision_recall_curve, auc
 
-"""
-Input: 
--- y_hat, list of predicted classes for sample sets
--- y_true, list with same len as y_hats giving true class
--- pos_label, an int specifying which class counts as "positive" for ROC
-    Defaults to 0 "Awake"
+import os
+import pickle
 
-Output:
--- areas, list of same len as y_hats containing ROC area under curve (AUC)
--- MatPlotLib Axes object, the ROC plot
--- ROC plot saved to disk
 """
-def roc_one_class(y_hats, y_truths, title = None, pos_label = 0, saveto=None, axis = None):
-    if not axis:
-        _, ax = plt.subplots(nrows=1, ncols=1, figsize=(20,10))
+Parameters: logit, logarithmic odds of probability p.
+    By definition, logits are:
+      logit(p) = log(p/(1-p)).
+    logits are easily transformed into a probability:
+      p = exp(logit)/(1 + exp(logit)).
+    Logits are useful when training classifier models because they do not 
+    suffer from some of the numerical issues that the sigmoid function 
+    does. A key issue is saturation:  if \sigma(x) is the sigmoid, then 
+      (d/dx)\sigma(x) is very small for |x| >>0, 
+    leading to numerical underflow that prevents gradient descent methods 
+    from being effective in training classifiers. 
+
+Values: probability of given logit
+    p(logit) = exp(logit)/(1+exp(logit))
+"""    
+def logits_to_proba(logit):
+    return np.exp(logit)/(1+np.exp(logit))
+
+
+# Generator to create leave-one-out train/test splits.
+# Upon initialization, loads the separate data pickles.
+# Yields: (spectrogram[i], time[i], psg labels[i], neural network[i])
+## If exclude != None, then it's a list of subject numbers not to be yielded.
+def data_yielder(data_path, exclude = None, nn = True, nn_base_name = None):
+    # Ensure uniform input
+    data_path = data_path if data_path[-1] == "/" else data_path + "/"
+
+    neural_path = data_path + "neural/"
+    pickle_path = data_path + "pickles/"
+
+    # Load the separate numpy pickles into lists.
+    spectros = []
+    time = []
+    psg = []
+    nns = []
+    
+    if nn_base_name == None:
+        nn_base_name = "_trained_cnn.h5"
+        
+    # os.walk[0] is the top-level directory. This is where the
+    # by-subject pickle folders should be.
+    list_of_subjects = next(os.walk(pickle_path))[1]
+    list_of_subjects = [s for s in list_of_subjects if s not in exclude]
+
+    for s in list_of_subjects:
+        
+        with open(pickle_path + s + "/spectros.pickle", "rb") as f:
+            spectros.append(pickle.load(f))
+        with open(pickle_path + s + "/time.pickle", "rb") as f:
+            time.append(pickle.load(f))
+        with open(pickle_path + s + "/psg.pickle", "rb") as f:
+            psg.append(pickle.load(f))
+        if nn:
+            nns.append(tf.keras.models.load_model(neural_path + s + nn_base_name))
+
+    for i in range(len(list_of_subjects)):
+        if nn:
+            yield list_of_subjects[i], spectros[i], time[i], psg[i], nns[i]
+        else:
+            yield list_of_subjects[i], spectros[i], time[i], psg[i]
+        
+# See data_yielder for an explanation of the parameters.
+# Yields: (subject number exclude from training, training_split_data, testing_split_data)
+## Where:
+# training_split_data:
+#   [0] if with_time, a 2-tuple:
+#     [0] training spectrograms tensor, shape (*, 65, 73)
+#     [1] training time tensor, shape (*,)
+#     (!) if not with_time, just element [0]
+#   [1] training psg labels tensor, shape (*,)
+# testing_split_data is similar.
+def split_yielder(data_path = None, exclude = None, with_time = True):
+            
+    """
+    Each d in ev.data_yielder(...) is a 4-tuple:
+      [0] this subject's number
+      [1] this subject's spectrogram tensor, shape (*, 65, 73)
+      [2] this subject's time tensor, shape (*,)
+      [3] this subject's psg labels tensor, shape (*,)
+    """
+    data_list = [d for d in data_yielder(data_path = data_path, exclude = exclude, nn = False)]  
+    
+    for i, d in enumerate(data_list):
+        if i == 0:
+            skip_d = data_list[1:]
+        else:
+            skip_d = data_list[:i-1] + data_list[i:]
+            
+        train_spectro = np.concatenate([s[1] for s in skip_d])        
+        train_psg = np.concatenate([s[3] for s in skip_d])
+        
+        
+        if with_time:
+            train_time = np.concatenate([s[2] for s in skip_d])
+            training_split_data = ((train_spectro, train_time), train_psg)
+            testing_split_data = ((d[1], d[2]), d[3])
+        else:
+            training_split_data = (train_spectro, train_psg)
+            testing_split_data = (d[1], d[3])
+    
+        yield (d[0], training_split_data, testing_split_data)
+      
+def pr_roc(subject, data_path, ax=None, pos_label=0, mode="roc", title=None, saveto=None, from_logits=True, nn_base_name=None):
+    if mode not in ['pr', 'roc']:
+        raise ValueError("mode must be in ['pr', 'roc'].")
+        
+    if nn_base_name == None:
+        nn_base_name = "_trained_cnn.h5"
+
+    # Ensure data_path has the form we want
+    data_path = (data_path if (data_path[-1] == "/") else (data_path + "/"))
+
+    # Load the neural network
+    nn = tf.keras.models.load_model(data_path + "neural/" + subject + nn_base_name)
+
+    # Load our data
+    with open(data_path + "pickles/" + subject + "/spectros.pickle", "rb") as f:
+        sp = pickle.load(f)
+    with open(data_path + "pickles/" + subject + "/psg.pickle", "rb") as f:
+        y_true = pickle.load(f)
+
+        # Binary classification
+        y_true = np.where(y_true > 0, 1, 0)
+
+    with open(data_path + "pickles/" + subject + "/time.pickle", "rb") as f:
+        t = pickle.load(f)
+
+    # Evaluate the data using this network
+    if from_logits:
+        evalu = logits_to_proba(nn.predict([sp, t]))
     else:
-        ax = axis
-    ax.plot([0, 1], '--', c='#854208')
-    ax.set_xlabel("False positive rate", fontsize=14)
-    ax.set_ylabel("True positive rate", fontsize=14)
-    if title:
-        ax.set_title(title, fontsize=16)
+        evalu = nn.predict([sp, t])
+
+    # Get a plotting object if we weren't given one
+    if ax == None:
+        _, ax = plt.subplots(nrows=1, ncols=1, figsize=(20,10))
+
+    if mode == "pr":
+        # precision, recall, thresholds
+        y, x, _ = precision_recall_curve(y_true, evalu[:, pos_label], pos_label=pos_label)
+
+        # A 'no-skill' predictor that guesses classes uniformly at random will have
+        # - constant precision equal to the fraction of positive classes in the data.
+        # - constant recall 0.5
+        p_pos = len(y_true[y_true == pos_label])/len(y_true)
+        ax.plot([0,1], [p_pos, p_pos]) # 'no-skill' line
+
+    elif mode == "roc":
+        # true pos rate, false pos rate, thresholds
+        x, y, _ = roc_curve(y_true, evalu[:, pos_label], pos_label= pos_label)
+        ax.plot([0,1], [0,1])
+
+    # (x,y) == (recall, precision) or (fpr, tpr) depending on mode
+    ax.plot(x, y)
+
     ax.xaxis.set_major_locator(MultipleLocator(0.1))
     ax.yaxis.set_major_locator(MultipleLocator(0.1))
-
-    # returned list of AUC scores
-    areas = np.zeros(len(y_hats))
-
-    count = 0
-    for hat, true in zip(y_hats, y_truths):
-        fpr, tpr, _ = roc_curve(y_true = true, y_score = hat, pos_label = pos_label)
-        areas[count] = auc(fpr, tpr)
-        ax.plot(fpr, tpr, label="AUC: {:5.4f}".format(areas[count]))
-
-        count += 1
-
-    ax.legend(loc='lower right')
-    
+    ax.set(xlim=(-0.05,1.05), ylim=(-0.05,1.05))
     ax.grid(True)
-    
-    ax.margins(0.05) 
-
+    if title:
+        ax.set_title(title, fontsize=20)
     if saveto:
         plt.savefig(saveto)
+    
+    return (y_true, evalu)
 
-    return areas
+"""
+TODO: use pr_roc function instead of repeating code here
+Parameters:
+    * data_yielder should be a generator or list that produces tuples of the form:
+    ~~~ (subject name, spectrogram data, time data, PSG label data, neural network)
+      Conveniently, the directory ../data/pickles/ has folders:
+      ../data/pickles/#######/
+      |------ spectros.pickle
+      |------ time.pickle
+      |------ psg.pickle
+      |------ trained_cnn.h5
+      so an os.walk can easily be turned into the desired yielder.
+    * pos_label is the number of the class to be considered "positive". Defaults to 0.
+    * label_names is an optional dictionary of names to use for labeling the 
+    * saveto is a string with file path. The ROC plot will be saved as a PNG here. 
+    ~~~ saveto = None (the default) saves nothing.
+Returns:
+    * (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
+"""
+def pr_roc_from_list(data_yielder, title=None, pos_label=0, label_names : dict=None, saveto=None, axis=None, mode="roc", from_logits = True):
+    if mode not in ['pr', 'roc']:
+        raise ValueError("mode must be in ['pr', 'roc'].")
 
-
-def roc_multi_class(y_hats, y_truths, classes = None, class_names = None, title = None, saveto=None):
-    # Default behavoir when no list of classes is provided.
-    # y_hats[0] should be a 2D numpy array. Rows (axis 1) give class probabilities
-    # Figure out number of classes by the "width" of this array.
-    if classes == None:
-        classes = [i for i in range(y_hats[0].shape[1])]
-
-    fig, axs = plt.subplots(nrows = len(classes), ncols = 1, figsize=(20, 5+10*len(classes)), tight_layout = True)
-    for c in classes:
-        if class_names:
-            print("Working on class %s" % class_names[c])
-            this_title = "%s" % class_names[c]
+    #######################################################################################
+    #######################################################################################
+    # Evaluate the left-one-out test samples on the trained neural networks
+    evaluations = []
+    pr_rocs = []
+    failed = []
+    succeeded = []
+    for subject, sp, time, psg, nn in data_yielder:
+    #    print("Working on %s" % subject)
+        if from_logits:
+            evaluations.append(logits_to_proba(nn.predict([sp, time])))
         else:
-            print("Working on class %d" % c)
-            this_title = "Class %d" % c
+            evaluations.append(nn.predict([sp, time]))
+    #    print("Evaluated...")
 
-        these_hats = [h[:, c] for h in y_hats]
-        roc_one_class(these_hats, y_truths, pos_label=c, title=this_title, axis=axs[c])
+        # roc_curve(...) ~~> (FPR, TPR, thresholds)
+        # evaluations[-1] is a numpy array with shape (*, 2)
+        #   ~~~ evaluations[-1][i] == (Pr(y[i] = 0), Pr(y[i] = 1))
+        #   Thus, we use evaluations[-1][:, pos_label] to get a vector of probabilites of y[i] == pos_label
+        try:
+            if mode == "roc":
+                pr_rocs.append(roc_curve(y_true = psg, y_score=evaluations[-1][:,pos_label], pos_label = pos_label))
+            else: 
+                pr_rocs.append(precision_recall_curve(psg, evaluations[-1][:, pos_label], pos_label=pos_label))
+
+            succeeded.append(subject)
+        except:
+            failed.append(subject)
+            continue
+
+    if len(failed) > 0:
+        print("There were class issues for:")
+        print(failed)
+    if len(succeeded) == 0:
+        return evaluations
+
+    #######################################################################################
+    #######################################################################################
+    # Adjust the ROC outcomes so they're all the same length. That way, we can average them
+    # each roc in pr_rocs has the form
+    # roc == (FPR, TPR, thresholds)
+    max_thresh_len = max([len(roc[2]) for roc in pr_rocs]) # max length of fpr vector
+    fpr_interpolated = np.linspace(0, 1, max_thresh_len) # thresholds vector, for interpolation
+
+    ## rocs_np[split #, threshold[j], fpr 0 / tpr 1]
+    tpr_interpolated = np.zeros((len(pr_rocs), max_thresh_len))
+    for j in range(len(pr_rocs)):
+        ## pr_rocs[j] == (fpr, tpr, thresholds)
+        tpr_interpolated[j] = np.interp(x =fpr_interpolated, xp=pr_rocs[j][0], fp=pr_rocs[j][1]) 
+
+    roc_averaged = np.mean(tpr_interpolated, axis=0, dtype=np.float64)
+
+    if axis == None:
+        fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(20, 10))
+    else:
+        ax = axis
+
+    ax.plot(fpr_interpolated, roc_averaged, c='#449deb', lw=2)
+    for j in range(len(pr_rocs)):
+        ax.plot(pr_rocs[j][0], pr_rocs[j][1], alpha=0.3, c='orange')
+
+    ax.grid(True)
+
+    ax.margins(0.01)
+    
+    # Set up 'no-skill' baselines
+    
+    if mode == "roc":
+        ax.plot([0, 1], '--', c='#000000')
+        if label_names:
+            xlabel = "%s error rate" % label_names["negative"]
+            ylabel = "%s accuracy" % label_names["positive"]
+        else:
+            xlabel = "False positive rate"
+            ylabel = "True positive rate"
+
+    else: # precision-recall mode
+        # A 'no-skill' predictor that guesses classes uniformly at random will have
+        # - constant precision equal to the fraction of positive classes in the data.
+        # - constant recall 0.5
+        #p_pos = len(psg[psg == pos_label])/len(psg)
+        #ax.plot([0,1], [p_pos, p_pos]) # 'no-skill' line
+        
+        if label_names:
+            xlabel = "%s recall" % label_names["positive"]
+            ylabel = "%s precision" % label_names["positive"]
+        else:
+            xlabel = "Recall"
+            ylabel = "Precision"
+        
+    ax.set_xlabel(xlabel, fontsize=15)
+    ax.set_ylabel(ylabel, fontsize=15)
 
     if title:
-        plt.suptitle(title, fontsize=20)
+        ax.set_title(title, fontsize=20)
+    ax.xaxis.set_major_locator(MultipleLocator(0.1))
+    ax.yaxis.set_major_locator(MultipleLocator(0.1))
+    
+    if not axis:
+        plt.tight_layout()
+
     if saveto:
         plt.savefig(saveto)
+        
+    return_message = """
+Returning: 3-tuple with elements [i]: 
+    [0] length-{} list of subjects whose complementary NN gives no empty classes
+    [1] length-{} list of numpy tensors with class probabilities, each of shape (*, 2)
+    [2] 2-tuple of numpy arrays of interpolated (FPR, TPR) or (recall, precision)
+        each with shape {}""".format(len(succeeded), len(evaluations), tpr_interpolated.shape)
 
-    return (fig, axs)
+    print(return_message)
+    return (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
 
 """
-data should be a list of lists with structure:
-    -- data[0] = training data
-    -- data[1] = testing data
-    each data[i] has two elements:
-    -- data[i][0] = model inputs. Either spectrogram tensor, or [spectrogram, times] 
-    -- data[i][1] = PSG labels tensor. DO NOT PREPROCESS THIS INTO BI/TRINARY CLASSES 
-
-nn_model should be a compiled Keras model, either trained or untrained. 
-For each d in data_splits, a ("deep") copy will be made and trained for 15 epochs. 
+ Displays 3x3 grid of spectrograms, sampled randomly from a 
+ numpy tensor, Xs, whose axis-0 cross-sections are the spectrograms. 
+ Each spectrogram is labeled with the axis-0 index and class label from ys.
+ 
+ - Xs should be the spectrograms, ys the PSG labels. 
+ -- Uses matplotlib.pyplot.pcolormesh, so this can be
+    used for displaying random axis-0 cross-sections of numpy 3-tensors.
+ - ys should be the class labels
 """
-def train_then_ROC_PR(data, nn_model, uses_time = True, saveto_path = None, pos_label = 0):
-    if not (isinstance(pos_label, int) or isinstance(pos_label, list)):
-        raise ValueError("pos_label needs to be an integer or a list of length 3 or 4.")
-        return None
-
-    fprs = []
-    tprs = []
-    precs = []
-    recas = []
-    aucs = []
-
-    training, testing  = data
-
-    #####################################################################
-    # Discard -1 ("unscored") labels, and corresponding data
-    #####################################################################
-    training_scored, testing_scored = (training[1] != -1), (testing[1] != -1)
-
-    # Do PSG labels first
-    training[1] = training[1][training_scored]
-    testing[1] = testing[1][testing_scored]
-
-    # Now reduce the input data accordingly
-    if uses_time:
-        # spectrograms
-        training[0][0] = training[0][0][training_scored]
-        testing[0][0] = testing[0][0][testing_scored]
-
-        # time
-        training[0][1] = training[0][1][training_scored]
-        testing[0][1] = testing[0][1][testing_scored]
-    else:
-        training[0] = training[0][training_scored]
-        testing[0] = testing[0][testing_scored]
-
-    #####################################################################
-    # Now modify the labels to give wake/sleep or staging 
-    #####################################################################
-
-    # Decide which label mode the user wants based on the type, and possibly length, of pos_label. 
-    if isinstance(pos_label, int): # binary classifier (Awake/Asleep), default
-        training[1] = np.where(training[1] > 0, 1, 0)
-        testing[1] = np.where(testing[1] > 0, 1, 0)
-        mode = 2
-
-    elif isinstance(pos_label, list):
-        if len(pos_label) == 3: # Awake/NREM/REM
-            training[1] = np.piecewise( \
-                training[1], \
-                [ \
-                 training[1] == 0, \
-                 (0 < training[1]) & (training[1] < 5), \
-                 training[1] == 5 \
-                ], \
-                [0,1,2] \
-            )
-            testing[1] = np.piecewise( \
-                testing[1], \
-                [ \
-                 testing[1] == 0, \
-                 (0 < testing[1]) & (testing[1] < 5), \
-                 testing[1] == 5 \
-                ], \
-                [0,1,2] \
-            )
-            mode = 3
-        else: # Awake/NREM12/NREM34/REM
-            training[1] = np.piecewise(
-                training[1], \
-                [training[1] == 0, \
-                 (0 < training[1]) & (training[1] < 3), \
-                 (2 < training[1]) & (training[1] < 5), \
-                 training[1] == 5
-                ], \
-                [0, 1, 2, 3] \
-            )
-            testing[1] = np.piecewise(
-                testing[1], \
-                [testing[1] == 0, \
-                 (0 < testing[1]) & (testing[1] < 3), \
-                 (2 < testing[1]) & (testing[1] < 5), \
-                 testing[1] == 5
-                ], \
-                [0, 1, 2, 3] \
-            )
-            mode = 4
-
-    print("Split okay! Using %d labels." % mode)
-    print(training[1])
-    print(testing[1])
-    return (fprs, tprs, aucs, precs, recas)
-
-    this_nn = deepcopy(nn_model)
-
-    this_nn.fit(training[0], testing, epochs=15, verbose = 0)
-
-    predictions = this_nn.predict(testing)
-
-if __name__ == "__main__":
-    training = [np.arange(0, 10, 1), np.random.randint(-1, 6, 10)]
-    testing = [np.arange(0, 5, 1), np.random.randint(-1, 6, 5)]
+def sample_pics(Xs, ys = None, with_maxmin = False):
+    import random
     
-    print(training[1])
-    print(testing[1])
-
-    train_then_ROC_PR([training, testing], "abc", uses_time=False, pos_label=[0,1,2])
+    Xs_len = Xs.shape[0]
+    if with_maxmin:
+        color_min = Xs.min()
+        color_max = Xs.max()
+    else:
+        color_min = None
+        color_max = None
+    
+    # Randomly select 9 indices for plotting the colormesh of their stft.
+    # Running this cell repeatedly gives a new subset each time.
+    inds = random.sample(range(Xs_len), k=9)
+    
+    # mapping dict taking pairs (i,j) to our random indices
+    # Used in for loop to plot random subset of our data.
+    mapper = {
+        (0,0) : inds[0],
+        (0,1) : inds[1],
+        (0,2) : inds[2],
+        (1,0) : inds[3],
+        (1,1) : inds[4],
+        (1,2) : inds[5],
+        (2,0) : inds[6],
+        (2,1) : inds[7],
+        (2,2) : inds[8],
+    }
+    
+    fig, axs = plt.subplots(ncols=3, nrows=3, figsize=(10,10))
+    
+    for i in [0,1,2]:
+        for j in [0,1,2]:
+            index = mapper[(i,j)]
+            X = Xs[index]
+            axs[i][j].pcolormesh(X, vmin=color_min, vmax=color_max)
+            title = "Index: {}".format(index)
+            if ys:
+                title += ", Class: {}".format(ys[index])
+                
+            axs[i][j].set_title(title)
+    plt.tight_layout()

@@ -41,6 +41,12 @@ import pandas as pd
 
 from scipy.signal import stft
 from librosa import amplitude_to_db
+import sys
+from sklearn.model_selection import train_test_split
+from os.path import isfile, isdir
+import os
+import time
+
 
 ##################################################
 # Helper functions
@@ -90,16 +96,13 @@ def num_der(fn : np.array) -> np.array:
    --- interpolate dmags in windows indexed by psg windows
    - Take stft of dmags
 """
-def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window = 90.0, with_time = True) -> list:
+def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window = 90.0, with_time = True) -> tuple:
     print("Working inside make_stft_tensor now...")
-    with_time = True
     if len(list_of_dmags) != len(list_of_psgs):
         raise IndexError("list_of_dmags and list_of_psgs must have the same length.\nReturning None!")
-        return None
     # Window length must be positive
     if length_of_window <= 0:
         raise ValueError("length_of_window must be > 0.\nReturning None!")
-        return None
 
     
     ##################################################
@@ -109,53 +112,72 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     # This becomes important when we're applying STFT to our windows, assuming sampling at 50Hz (0.02 second gaps).
     #   (More info below)
     length_of_window = 0.02*int(length_of_window/0.02) # Make length_of_window an integer multiple of 0.02
+#    print("length_of_window", length_of_window)
+    
     overflow = int(length_of_window / 0.02) % 128
+#    print("overflow", overflow)
+    
     length_of_window = length_of_window + 0.02*(128 - overflow) # Now (length_of_window/0.02) % 128 == 0
+#    print("length_of_window", length_of_window)
+    win_radius = length_of_window/2
 
     # Determine the number of windows we'll be making per-person. 
     # One window per PSG labeled 30-second window
     n_wins = sum([len(p) for p in list_of_psgs])
-    win_radius = length_of_window/2
+#    print("n_wins", n_wins)
 
     ##################################################
     ### Set up output tensors
     ##################################################
     dmags_win = np.zeros((n_wins, int(length_of_window/0.02))) # windowed dmags
+#    print("dmags_win.shape", dmags_win.shape)
+    
     labels_win = np.zeros(n_wins) # labels; modify with "-2" class if insufficient sampling in window
+#    print("labels_win.shape", labels_win.shape)
+    
     time_window_base = np.arange(0, length_of_window, 0.02) # sliding time window
+#    print("time_window_base", time_window_base)
     
     if with_time:
         time_win = np.zeros(n_wins)
+#        print("time_win.shape", time_win.shape)
 
 
     """
     ##################################################
     ### Window calculation/stacking loop
     ##################################################
-    Counter for axis-0 index of tensors
     """
+    dmag_progress_counter = 0 # Purely cosmetic. Used for printing updates on progress.
+    len_of_dmags = len(list_of_dmags) # Also for progress reporting only
+#    print("len_of_dmags", len_of_dmags)
+
+    # count is used for the primary index of
+    #   dmag_win
+    #   labels_win
+    #   time_win
+    # Because it must increase sequentially over all elements of
+    # each PSG array, we control it manually (e.g. cannot use enumerate(...) in the for loops)
     count = 0
 
-    dmag_counter = 0
-
-    # Zip together the lists of dmags and psg 
-    len_of_dmags = len(list_of_dmags)
-
     for d, p in zip(list_of_dmags, list_of_psgs):
-        dmag_counter += 1
+
+#        print("dmags_win.shape", dmags_win.shape)
+#        print("time_window_base", time_window_base)
+#        print("labels_win.shape", labels_win.shape)
+
+        dmag_progress_counter += 1 # Purely cosmetic. Used for printing updates on progress.
+
         # Now iterate over times t and labels l
-        N = len(p)
-        inner_count = 0
+        # p is a numpy array of shape (*, 2) with each row being a (time, label) pair
         for t, l in p:
-            inner_count += 1
-            #print("  %d of %d is %3.2f" % (dmag_counter, len_of_dmags, 100*(inner_count/N)) + "% complete")
 
             """
             ##################################################
             ### Get the window of dmag referenced by PSG
             ##################################################
             t+15 is in the middle of 30s interval
-               t_start/end = (t+15) +/- win_radius 
+               t_start/_end = (t+15) +/- win_radius 
             gives a window of length (length_of_window) centered at t+15.
             """
             t_start = (t+15) - win_radius # win_radius defaults to 45
@@ -181,7 +203,13 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
             time = time_window_base + t_start
 
             dmags_win[count, :] = np.interp(time, this_d[:,0], this_d[:,1])
+#            print("dmags_win.shape", dmags_win.shape)
+#            print("labels_win.shape", labels_win.shape)
+#            print("count", count)
+#            print("l", l)
+#            print("time_window_base.shape", time_window_base.shape)
             labels_win[count] = l
+#            print(labels_win[count])
 
             if with_time:
                 time_win[count] = t+15
@@ -190,7 +218,7 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
             count += 1
 
         # back to:       for d, p in zip(list_of_dmags, list_of_psgs)
-        print("%d of %d done..." % (dmag_counter, len_of_dmags))
+        print("Magnitude differential windowing: %d of %d done..." % (dmag_progress_counter, len_of_dmags))
 
     # Filter out those intervals with labels -1 (unscored) or -2 (those we skipped)
     keep = (labels_win >= 0)
@@ -202,17 +230,17 @@ def make_stft_tensor(list_of_dmags : list, list_of_psgs : list, length_of_window
     # Take STFT in segments of 128 points (2.56 seconds @ 50Hz)
     # Then boost this with amplitude_to_db, approx. 10*np.log10(../ref) but good with 0s.
     print("Working on spectrograms now...")
+#    print("dmags_win.shape", dmags_win.shape)
     spectro_win = amplitude_to_db(np.abs(stft(dmags_win, fs=50, nperseg=128)[-1]))
 
     # Return in the same order as described in the docstring for this method.
     if with_time:
-        return (spectro_win, labels_win, dmags_win, time_win)
+        return spectro_win, labels_win, dmags_win, time_win
     else:
-        return (spectro_win, labels_win, dmags_win)
+        return spectro_win, labels_win, dmags_win
 
 if __name__ == "__main__":
     # If the user just wants "--help" or "-h" print some and exit!
-    import sys
     if ("--help" in sys.argv) or ("-h" in sys.argv):
         print("""
 Arguments:
@@ -230,11 +258,6 @@ Arguments:
 
 
 
-    from sklearn.model_selection import train_test_split
-    from os.path import isfile, isdir
-    import os 
-    from joblib import dump
-    import time
 
     print(sys.argv[0], " running in script mode!")
 
