@@ -48,7 +48,7 @@ def data_yielder(data_path, neural_path = None, exclude = None, nn = True, nn_ba
 
     if neural_path == None:
         neural_path = data_path + "neural/"
-    data_path = data_path if data_path[-1] == "/" else data_path + "/"
+    neural_path = neural_path if neural_path[-1] == "/" else neural_path + "/"
     pickle_path = data_path + "pickles/"
 
     # Load the separate numpy pickles into lists.
