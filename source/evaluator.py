@@ -42,11 +42,13 @@ def logits_to_proba(logit):
 # Upon initialization, loads the separate data pickles.
 # Yields: (spectrogram[i], time[i], psg labels[i], neural network[i])
 ## If exclude != None, then it's a list of subject numbers not to be yielded.
-def data_yielder(data_path, exclude = None, nn = True, nn_base_name = None):
+def data_yielder(data_path, neural_path = None, exclude = None, nn = True, nn_base_name = None):
     # Ensure uniform input
     data_path = data_path if data_path[-1] == "/" else data_path + "/"
 
-    neural_path = data_path + "neural/"
+    if neural_path == None:
+        neural_path = data_path + "neural/"
+    data_path = data_path if data_path[-1] == "/" else data_path + "/"
     pickle_path = data_path + "pickles/"
 
     # Load the separate numpy pickles into lists.
@@ -256,7 +258,7 @@ Returning: 3-tuple with elements [i]:
     [1] length-{} list of numpy tensors with class probabilities, shape {}
     [2] 2-tuple {} of interpolated numpy arrays, 
           first with shape {} 
-          second with shape {}""" .format( \
+          second with shape {}""".format( \
                 len(succeeded), \
                 len(evaluations), \
                 len(evaluations[0]), \
