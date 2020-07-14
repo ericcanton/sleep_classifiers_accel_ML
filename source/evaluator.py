@@ -37,10 +37,23 @@ Values: probability of given logit
 def logits_to_proba(logit):
     return np.exp(logit)/(1+np.exp(logit))
 
+def sleep_classes(inputs, n_classes):
+    if n_classes == 2:
+        return np.where(inputs > 0, 1, 0)
+    elif n_classes == 3:
+        return np.piecewise(inputs, [inputs == 0, 
+                                     (inputs > 0) & (inputs < 5),
+                                     inputs == 5], [0, 1, 2])
+    elif n_classes == 4:
+        return np.piecewise(inputs, [inputs == 0, 
+                                     (inputs > 0) & (inputs < 3),
+                                     (inputs >= 3) & (inputs < 5),
+                                     inputs == 5], [0, 1, 2, 3])
+
 
 # Generator to create leave-one-out train/test splits.
 # Upon initialization, loads the separate data pickles.
-# Yields: (spectrogram[i], time[i], psg labels[i], neural network[i])
+# Yields: (subject_number[i], spectrogram[i], time[i], psg labels[i], neural network[i])
 ## If exclude != None, then it's a list of subject numbers not to be yielded.
 def data_yielder(data_path, neural_path = None, exclude = None, nn = True, nn_base_name = None):
     # Ensure uniform input
@@ -144,7 +157,7 @@ Parameters:
 Returns:
     * (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
 """
-def pr_roc_from_path(data_yielder, title=None, pos_label=0, label_names : dict=None, saveto=None, axis=None, mode="roc", from_logits = True):
+def pr_roc_from_path(data_yielder, title=None, pos_label=0, n_classes=2, label_names : dict=None, saveto=None, axis=None, mode="roc", from_logits = True):
     if mode not in ['pr', 'roc']:
         raise ValueError("mode must be in ['pr', 'roc'].")
 
@@ -156,7 +169,9 @@ def pr_roc_from_path(data_yielder, title=None, pos_label=0, label_names : dict=N
     failed = []
     succeeded = []
     for subject, sp, time, psg, nn in data_yielder:
-    #    print("Working on %s" % subject)
+        print(subject)
+        psg = sleep_classes(psg, n_classes)
+
         if from_logits:
             evaluations.append(logits_to_proba(nn.predict([sp, time])))
         else:
@@ -245,78 +260,62 @@ def pr_roc_from_path(data_yielder, title=None, pos_label=0, label_names : dict=N
         ax.set_title(title, fontsize=20)
     ax.xaxis.set_major_locator(MultipleLocator(0.1))
     ax.yaxis.set_major_locator(MultipleLocator(0.1))
-    
-    if not axis:
-        plt.tight_layout()
 
     if saveto:
         plt.savefig(saveto)
-        
-    return_message = """
-Returning: 3-tuple with elements [i]: 
-    [0] length-{} list of subjects whose complementary NN gives no empty classes
-    [1] length-{} list of numpy tensors with class probabilities, shape {}
-    [2] 2-tuple {} of interpolated numpy arrays, 
-          first with shape {} 
-          second with shape {}""".format( \
-                len(succeeded), \
-                len(evaluations), \
-                len(evaluations[0]), \
-                "(FPR, TPR)" if mode == 'roc' else "(recall, precision)", \
-                tpr_interpolated.shape)
+    
+    return [(s, auc(curve[0], curve[1])) for curve, s in zip(pr_rocs, succeeded)]
 
-    print(return_message)
-    return (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
-
-"""
- Displays 3x3 grid of spectrograms, sampled randomly from a 
- numpy tensor, Xs, whose axis-0 cross-sections are the spectrograms. 
- Each spectrogram is labeled with the axis-0 index and class label from ys.
- 
- - Xs should be the spectrograms, ys the PSG labels. 
- -- Uses matplotlib.pyplot.pcolormesh, so this can be
-    used for displaying random axis-0 cross-sections of numpy 3-tensors.
- - ys should be the class labels
-"""
-def sample_pics(Xs, ys = None, with_maxmin = False):
-    import random
-    
-    Xs_len = Xs.shape[0]
-    if with_maxmin:
-        color_min = Xs.min()
-        color_max = Xs.max()
-    else:
-        color_min = None
-        color_max = None
-    
-    # Randomly select 9 indices for plotting the colormesh of their stft.
-    # Running this cell repeatedly gives a new subset each time.
-    inds = random.sample(range(Xs_len), k=9)
-    
-    # mapping dict taking pairs (i,j) to our random indices
-    # Used in for loop to plot random subset of our data.
-    mapper = {
-        (0,0) : inds[0],
-        (0,1) : inds[1],
-        (0,2) : inds[2],
-        (1,0) : inds[3],
-        (1,1) : inds[4],
-        (1,2) : inds[5],
-        (2,0) : inds[6],
-        (2,1) : inds[7],
-        (2,2) : inds[8],
-    }
-    
-    fig, axs = plt.subplots(ncols=3, nrows=3, figsize=(10,10))
-    
-    for i in [0,1,2]:
-        for j in [0,1,2]:
-            index = mapper[(i,j)]
-            X = Xs[index]
-            axs[i][j].pcolormesh(X, vmin=color_min, vmax=color_max)
-            title = "Index: {}".format(index)
-            if ys:
-                title += ", Class: {}".format(ys[index])
-                
-            axs[i][j].set_title(title)
-    plt.tight_layout()
+#
+#"""
+# Displays 3x3 grid of spectrograms, sampled randomly from a 
+# numpy tensor, Xs, whose axis-0 cross-sections are the spectrograms. 
+# Each spectrogram is labeled with the axis-0 index and class label from ys.
+# 
+# - Xs should be the spectrograms, ys the PSG labels. 
+# -- Uses matplotlib.pyplot.pcolormesh, so this can be
+#    used for displaying random axis-0 cross-sections of numpy 3-tensors.
+# - ys should be the class labels
+#"""
+#def sample_pics(Xs, ys = None, with_maxmin = False):
+#    import random
+#    
+#    Xs_len = Xs.shape[0]
+#    if with_maxmin:
+#        color_min = Xs.min()
+#        color_max = Xs.max()
+#    else:
+#        color_min = None
+#        color_max = None
+#    
+#    # Randomly select 9 indices for plotting the colormesh of their stft.
+#    # Running this cell repeatedly gives a new subset each time.
+#    inds = random.sample(range(Xs_len), k=9)
+#    
+#    # mapping dict taking pairs (i,j) to our random indices
+#    # Used in for loop to plot random subset of our data.
+#    mapper = {
+#        (0,0) : inds[0],
+#        (0,1) : inds[1],
+#        (0,2) : inds[2],
+#        (1,0) : inds[3],
+#        (1,1) : inds[4],
+#        (1,2) : inds[5],
+#        (2,0) : inds[6],
+#        (2,1) : inds[7],
+#        (2,2) : inds[8],
+#    }
+#    
+#    fig, axs = plt.subplots(ncols=3, nrows=3, figsize=(10,10))
+#    
+#    for i in [0,1,2]:
+#        for j in [0,1,2]:
+#            index = mapper[(i,j)]
+#            X = Xs[index]
+#            axs[i][j].pcolormesh(X, vmin=color_min, vmax=color_max)
+#            title = "Index: {}".format(index)
+#            if ys:
+#                title += ", Class: {}".format(ys[index])
+#                
+#            axs[i][j].set_title(title)
+#    plt.tight_layout()
