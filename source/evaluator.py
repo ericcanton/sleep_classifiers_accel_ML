@@ -5,6 +5,7 @@ Evaluation scripts. There are four functions defined here:
     3. split_yielder @ line  92
     4. pr_roc_from_path @ line 145
     5. sample_pics @ line 279
+    6. get_probabilities @ line 270
 """
 
 import numpy as np
@@ -265,6 +266,31 @@ def pr_roc_from_path(data_yielder, title=None, pos_label=0, n_classes=2, label_n
         plt.savefig(saveto)
     
     return [(s, auc(curve[0], curve[1])) for curve, s in zip(pr_rocs, succeeded)]
+
+
+
+
+def get_probabilities(data_yielder, n_classes=2, from_logits=True):
+   
+    subjects = []
+    evaluations = []
+    psgs = []
+    pr_rocs = []
+    failed = []
+    succeeded = []
+    for subject, sp, time, psg, nn in data_yielder:
+        print(subject)
+        psg = sleep_classes(psg, n_classes)
+
+        if from_logits:
+            evaluations.append(logits_to_proba(nn.predict([sp, time])))
+        else:
+            evaluations.append(nn.predict([sp, time]))
+        
+        subjects.append(subject)
+        psgs.append(psg)
+    
+    return subjects, psgs, evaluations
 
 #
 #"""
