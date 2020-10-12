@@ -156,7 +156,7 @@ def split_yielder(data_path = None, exclude = None, with_time = True):
 
 
 
-def eval_nn(subject_number, nn_base_name, with_time = False, data_path = None, neural_path = None):
+def eval_nn(subject_number, nn_base_name, with_time = True, data_path = None, neural_path = None):
     """
     Helper function to load one subject's data and the neural net training on the complementary data, 
     then evaluate the neural network on the testing data. Returns a numpy array with shape
@@ -201,16 +201,6 @@ def eval_nn(subject_number, nn_base_name, with_time = False, data_path = None, n
     except:
         print("There was an error opening the pickled spectrograms for {}.".format(subject_number))
         return
-    ## Load labels
-    try:
-        with open(data_path + subject_number + "/psg.pickle", "rb") as f:
-            psg = pickle.load(f)
-
-        psg = sleep_classes(psg, n_classes)
-
-    except:
-        print("There was an error opening the pickled PSG for {}.".format(subject_number))
-        return
 
     # Load time if we want that, and set up the testing data.
     if with_time is True:
@@ -230,7 +220,7 @@ def eval_nn(subject_number, nn_base_name, with_time = False, data_path = None, n
 
     return nn.predict(testing_X)
 
-def pr_roc(subject_number, nn_base_name, pos_class = 0, with_time = False, data_path = None, neural_path = None, mode = "roc"):
+def pr_roc(subject_number, nn_base_name, data_path = None, neural_path = None, with_time = True, mode = "roc", pos_class = 0):
     """
     Helper function to load one subject's data and the neural net training on the complementary data, 
     then evaluate the performance of this network via PR or ROC curve, depending on mode. 
@@ -246,68 +236,32 @@ def pr_roc(subject_number, nn_base_name, pos_class = 0, with_time = False, data_
         E.g. if pos_class = [0,1] then returns 
         [ pr_roc(..., pos_class = 0, ...), pr_roc(..., pos_class = 1, ...) ]
 
-    data_path and neural_path default to ../data/pickles and ../data/neural
     """
-    if not (isinstance(pos_class, int) or isinstance(pos_class, list)):
-        raise ValueError("pos_class must be an int or list of ints")
+    print(f"{mode} Subject number: {subject_number}")
 
-    # Set up paths
     if data_path is None:
         data_path = "data/pickles/"
-    else:
-        if not isinstance(data_path, str):
-            raise ValueError("data_path must be a string.")
-
-        if data_path[-1] != "/":
-            data_path += "/"
+    elif data_path[-1] != "/":
+        data_path += "/"
 
     if neural_path is None:
         neural_path = "data/neural/"
-    else:
-        if not isinstance(neural_path, str):
-            raise ValueError("neural_path must be a string.")
+    elif neural_path[-1] != "/":
+        neural_path += "/"
 
-        if neural_path[-1] != "/":
-            neural_path += "/"
+    outcome = eval_nn(subject_number, nn_base_name, with_time=with_time, data_path=data_path, neural_path=neural_path)
 
-    # Load the subject's data, throwing exceptions if the pickles are missing or unopenable.
-    ## Load spectrograms
-    try:
-        with open(data_path + subject_number + "/spectros.pickle", "rb") as f:
-            spectros = pickle.load(f)
-    except:
-        print("There was an error opening the pickled spectrograms for {}.".format(subject_number))
-        return
+    n_classes = outcome.shape[-1] # (n_timestamps, n_classes)
     ## Load labels
     try:
         with open(data_path + subject_number + "/psg.pickle", "rb") as f:
             psg = pickle.load(f)
+
+        psg = sleep_classes(psg, n_classes)
+
     except:
         print("There was an error opening the pickled PSG for {}.".format(subject_number))
         return
-
-    # Load time if we want that, and set up the testing data.
-    if with_time is True:
-        try:
-            with open(data_path + subject_number + "/time.pickle", "rb") as f:
-                time = pickle.load(f)
-        except:
-            print("There was an error opening the pickled times for {}.".format(subject_number))
-            return
-
-        testing_X = [spectros, time]
-
-    else:
-        testing_X = spectros
-
-    
-    # Load the neural network
-    try:
-        nn = tf.keras.models.load_model(neural_path + subject_number + nn_base_name)
-    except:
-        print("There was an error opening the trained neural network.")
-
-    outcome = nn.predict(testing_X)
 
     # Evaluate the outcomes, either operating on a single class if pos_class is an integer, or once per class given.
     eval_fn = roc_curve if mode == "roc" else precision_recall_curve
@@ -318,18 +272,14 @@ def pr_roc(subject_number, nn_base_name, pos_class = 0, with_time = False, data_
     else: # isinstance(pos_class, list)
         xys = [
             eval_fn(
-                y_true = psg, 
-                y_score = outcome[:, p], 
-                pos_label = pos_class) 
+                psg, 
+                outcome[:, p], # this parameter name is different depending on curve type?
+                pos_label = p
+                )[:-1] # Only grab x and y, not thresholds
             for p in pos_class
             ]
 
-        if len(xys) == 1:
-            xys = xys[0]
-
         return xys
-
-
 
 def pointwise_avg(xy_pairs):
     """
@@ -353,138 +303,154 @@ def pointwise_avg(xy_pairs):
     # Interpolate to all be evaluated on the full refinement
     ys = [np.interp(refined, x, y) for x, y in xy_pairs]
 
-    return np.mean(ys, axis=0)
+    return (refined, np.mean(ys, axis=0))
     
 
-"""
-TODO(ericcanton): use pr_roc function instead of repeating code here
-Parameters:
-    * data_yielder should be a generator or list that produces tuples of the form:
-    ~~~ (subject name, spectrogram data, time data, PSG label data, neural network)
-      Conveniently, the directory ../data/pickles/ has folders:
-      ../data/pickles/#######/
-      |------ spectros.pickle
-      |------ time.pickle
-      |------ psg.pickle
-      |------ trained_cnn.h5
-      so an os.walk can easily be turned into the desired yielder.
-    * pos_label is the number of the class to be considered "positive". Defaults to 0.
-    * label_names is an optional dictionary of names to use for labeling the 
-    * saveto is a string with file path. The ROC plot will be saved as a PNG here. 
-    ~~~ saveto = None (the default) saves nothing.
-Returns:
-    * (succeeded, evaluations, (fpr_interpolated, tpr_interpolated))
-"""
 def pr_roc_from_path(
+        nn_base_name,
         pickle_path,
         neural_path,
-        nn_base_name,
-        title=None, 
+        exclude = None,
+        with_time = True,
         pos_class = 0,
-        n_classes=2, 
-        label_names : dict = None, 
-        saveto=None, 
-        from_logits = True,
-        with_time = False):
+        title = None, 
+        label_names = None, 
+        saveto = None, 
+        from_logits = False):
+    """
+    Given:
+      - nn_base_name (str): the base name of NNs, 
+      - pickle_path (str): the folder containing spectrogram and time pickles, sorted by subject
+      - neural_path (str): the folder containing trained NNs to be evaluated
+    Produce:
+      - grid with two columns and len(pos_class) rows, with PR | ROC plots. 
+        -- pos_class (list or int): which class should be considered "positive" for PR/ROC?
+           If a list, evaluates PR and ROC per class.
+        Optionally, supports:
+        -- title (str): for the title if not None
+        -- label_names (list or dict): a list matching pos_class, or a dict if pos_class is int
+        -- saving PDF to disk, if saveto is not None.
+    
+    Optional parameters:
+      - with_time (bool, default True): does the NN set require a (None, 1) shaped time input?
+      - from_logits (bool, default False): the output of NN is in logits (True) or probabilities (False)
+        Useful for thresholds.
+    """
 
     import re
-
-    if mode not in ['pr', 'roc']:
-        raise ValueError("mode must be 'pr' OR 'roc'.")
 
     # Get list of NNs we have trained. These are the only ones we can evalutate!
     nns = next(os.walk(neural_path))[-1]
     subs = [re.search("[0-9]*", nn).group(0) for nn in nns]
+    subs = [s for s in subs if s not in exclude]
 
     # Make all of the plots. 
-    # We want to make an ROC and a PR plot for each class in pos_label.
+    # We want to make an ROC and a PR plot for each class in pos_class.
     # First make sure we have a list
-    if isinstance(pos_label, int):
-        pos_label = [pos_label]
+    if isinstance(pos_class, int):
+        pos_class = [pos_class]
 
-#    pr_roc_plots = {
-#        'pr': [pr_roc(
-#                subject_num = s, 
-#                nn_base_name = nn_base_name, 
-#                pos_class = pos_class,
-#                with_time = with_time, 
-#                data_path = pickle_path, 
-#                neural_path = neural_path, 
-#                mode = 'pr')
-#            for s in subs],
-#        'roc': [pr_roc(
-#                subject_num = s, 
-#                nn_base_name = nn_base_name, 
-#                pos_class = pos_class,
-#                with_time = with_time, 
-#                data_path = pickle_path, 
-#                neural_path = neural_path, 
-#                mode = 'roc')
-#            for s in subs]
-#    }
+
+    n_classes = len(pos_class)
+    fig, axs = plt.subplots(nrows=n_classes, ncols=2, figsize=(20, 10*n_classes), tight_layout=True)
+
+    if isinstance(label_names, dict) and (n_classes == 1):
+        label_names = [label_names]
+    elif isinstance(label_names, dict) and (n_classes > 1):
+        raise ValueError("label_names is a dict, but there is more than one class. Either make label_names a list of dicts, or use only one class.")
+
+    plot_data = {
+            'pr': [pr_roc(
+                subject_number = s,
+                nn_base_name = nn_base_name,
+                data_path = pickle_path,
+                neural_path = neural_path,
+                with_time = with_time,
+                mode="pr",
+                pos_class = pos_class) for s in subs],
+
+            'roc': [pr_roc(
+                subject_number = s,
+                nn_base_name = nn_base_name,
+                data_path = pickle_path,
+                neural_path = neural_path,
+                with_time = with_time,
+                mode="roc",
+                pos_class = pos_class) for s in subs]
+            }
+
+    print("per-class (x,y) pairs created for PR and ROC curves.")
+
+
+    for j in range(n_classes):
+        print("class = ", j)
+        ax_pr = axs[j, 0]
+        ax_roc = axs[j, 1]
+
+        ax_pr.grid(True)
+        ax_roc.grid(True)
+
+        ax_pr.margins(0.01)
+        ax_pr.xaxis.set_major_locator(MultipleLocator(0.1))
+        ax_pr.yaxis.set_major_locator(MultipleLocator(0.1))
+        ax_roc.margins(0.01)
+        ax_roc.xaxis.set_major_locator(MultipleLocator(0.1))
+        ax_roc.yaxis.set_major_locator(MultipleLocator(0.1))
     
-    # Get list of per-class probability tensors
-    outcomes = [eval_nn(
-        subject_num = s,
-        nn_base_name = nn_base_name,
-        n_classes = n_classes,
-        with_time = with_time,
-        data_path = pickle_path,
-        neural_path = neural_path)
-        for s in subs]
+        if isinstance(label_names, list): # No negative reactions is label_names not correct.
+            if label_names[j] is not None:
+                xlabel_pr = "%s recall" % label_names["positive"]
+                ylabel_pr = "%s precision" % label_names["positive"]
 
-
-
-
-    print("per-class (x,y) pairs created, where (x,y) = (FPR, TPR) or = (recall, precision).")
-
-    fig, ax = plt.subplots(nrows=n_classes, ncols=2, figsize=(10*n_classes, 20))
-    ax.grid(True)
-
-    
-
-    ax.margins(0.01)
-    
-    # Set up 'no-skill' baselines
-    
-    if mode == "roc":
-        ax.plot([0, 1], '--', c='#000000')
-        if label_names:
-            xlabel = "%s error rate" % label_names["negative"]
-            ylabel = "%s accuracy" % label_names["positive"]
+                xlabel_roc = "%s error rate" % label_names[j]["negative"]
+                ylabel_roc = "%s accuracy" % label_names[j]["positive"]
         else:
-            xlabel = "False positive rate"
-            ylabel = "True positive rate"
-
-    else: # precision-recall mode
-        # A 'no-skill' predictor that guesses classes uniformly at random will have
-        # - constant precision equal to the fraction of positive classes in the data.
-        # - constant recall 0.5
-        #p_pos = len(psg[psg == pos_label])/len(psg)
-        #ax.plot([0,1], [p_pos, p_pos]) # 'no-skill' line
+            xlabel_pr = "Recall"
+            ylabel_pr = "Precision"
+            xlabel_roc = "False positive rate"
+            ylabel_roc = "True positive rate"
         
-        if label_names:
-            xlabel = "%s recall" % label_names["positive"]
-            ylabel = "%s precision" % label_names["positive"]
-        else:
-            xlabel = "Recall"
-            ylabel = "Precision"
-        
-    ax.set_xlabel(xlabel, fontsize=15)
-    ax.set_ylabel(ylabel, fontsize=15)
+        ax_pr.set_xlabel(xlabel_pr, fontsize=15)
+        ax_pr.set_ylabel(ylabel_pr, fontsize=15)
+        ax_roc.set_xlabel(xlabel_roc, fontsize=15)
+        ax_roc.set_ylabel(ylabel_roc, fontsize=15)
 
-    if title:
-        ax.set_title(title, fontsize=20)
-    ax.xaxis.set_major_locator(MultipleLocator(0.1))
-    ax.yaxis.set_major_locator(MultipleLocator(0.1))
+        # Plot all of the PR curves, plus their pointwise average curve
+        # plot_data is a dict like:
+        # {
+        #   "pr": [..., (PR curve subject s and pos_class[0], ..., PR curve pos_class[-1]), ...]
+        #   "roc": [..., (ROC curve subject s and pos_class[0], ..., ROC curve pos_class[-1]), ...]
+        # }
+        # So, we want index [i][j] for subject i, class j
+        for i in range(len(subs)):
+            ax_pr.plot(
+                plot_data["pr"][i][j][0], # recall
+                plot_data["pr"][i][j][1], # precision
+                c = 'orange',
+                alpha = 0.7)
+            ax_roc.plot(
+                plot_data["roc"][i][j][0], # FPR
+                plot_data["roc"][i][j][1], # TPR
+                c = 'orange',
+                alpha = 0.7)
 
-    if saveto:
-        plt.savefig(saveto)
+        # Set up 'no-skill' baseline for ROC
+        ax_roc.plot([0, 1], '--', c='#000000')
+
+        # Find and Plot the pointwise average
+        avg_pr = pointwise_avg([plot_data["pr"][i][j] for i in range(len(subs))])
+        avg_roc = pointwise_avg([plot_data["roc"][i][j] for i in range(len(subs))])
+
+        ax_pr.plot(avg_pr[0], avg_pr[1], c = 'blue', alpha = 1)
+        ax_roc.plot(avg_roc[0], avg_roc[1], c = 'blue', alpha = 1)
+
+    if title is not None:
+        fig.suptitle(title, fontsize=20)
+
+    if saveto is not None:
+        plt.savefig(saveto, bbox_inches='tight', pad_inches=0.1)
     
-    return [(s, auc(curve[0], curve[1])) for curve, s in zip(pr_rocs, succeeded)]
-
-
-
+    return (fig, axs)
 
 def get_probabilities(data_yielder, n_classes=2, from_logits=True):
    
