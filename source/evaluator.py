@@ -313,6 +313,7 @@ def pr_roc_from_path(
         exclude = None,
         with_time = True,
         pos_class = 0,
+        pos_class_name = None,
         title = None, 
         label_names = None, 
         saveto = None, 
@@ -350,9 +351,12 @@ def pr_roc_from_path(
     if isinstance(pos_class, int):
         pos_class = [pos_class]
 
+    if isinstance(pos_class_name, str):
+        pos_class_name = [pos_class_name]
 
     n_classes = len(pos_class)
-    fig, axs = plt.subplots(nrows=n_classes, ncols=2, figsize=(20, 10*n_classes), tight_layout=True)
+    #fig, axs = plt.subplots(nrows=n_classes, ncols=2, figsize=(20, 10*n_classes))
+    fig, axs = plt.subplots(nrows=2, ncols=n_classes, figsize=(10*n_classes, 20))
 
     if isinstance(label_names, dict) and (n_classes == 1):
         label_names = [label_names]
@@ -384,8 +388,8 @@ def pr_roc_from_path(
 
     for j in range(n_classes):
         print("class = ", j)
-        ax_pr = axs[j, 0]
-        ax_roc = axs[j, 1]
+        ax_roc = axs[0, j]
+        ax_pr = axs[1, j]
 
         ax_pr.grid(True)
         ax_roc.grid(True)
@@ -410,10 +414,13 @@ def pr_roc_from_path(
             xlabel_roc = "False positive rate"
             ylabel_roc = "True positive rate"
         
-        ax_pr.set_xlabel(xlabel_pr, fontsize=15)
-        ax_pr.set_ylabel(ylabel_pr, fontsize=15)
-        ax_roc.set_xlabel(xlabel_roc, fontsize=15)
-        ax_roc.set_ylabel(ylabel_roc, fontsize=15)
+        if pos_class_name is not None:
+            ax_roc.set_title(pos_class_name[j], fontsize=20)
+
+        ax_pr.set_xlabel(xlabel_pr, fontsize=12)
+        ax_pr.set_ylabel(ylabel_pr, fontsize=12)
+        ax_roc.set_xlabel(xlabel_roc, fontsize=12)
+        ax_roc.set_ylabel(ylabel_roc, fontsize=12)
 
         # Plot all of the PR curves, plus their pointwise average curve
         # plot_data is a dict like:
