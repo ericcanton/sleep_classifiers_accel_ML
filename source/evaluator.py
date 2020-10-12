@@ -354,9 +354,12 @@ def pr_roc_from_path(
     if isinstance(pos_class_name, str):
         pos_class_name = [pos_class_name]
 
+    if len(pos_class) != len(pos_class_name):
+        raise ValueError("pos_class and pos_class_name must be an int/string pair, or lists of the same length.")
+
     n_classes = len(pos_class)
-    #fig, axs = plt.subplots(nrows=n_classes, ncols=2, figsize=(20, 10*n_classes))
-    fig, axs = plt.subplots(nrows=2, ncols=n_classes, figsize=(10*n_classes, 20))
+    #fig, axs = plt.subplots(nrows=n_classes, ncols=2, figsize=(20, 10*n_classes)) # vertical format
+    fig, axs = plt.subplots(nrows=2, ncols=n_classes, figsize=(10*n_classes, 20)) # horizontal format
 
     if isinstance(label_names, dict) and (n_classes == 1):
         label_names = [label_names]
