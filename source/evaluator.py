@@ -324,18 +324,20 @@ def pr_roc_from_path(
       - pickle_path (str): the folder containing spectrogram and time pickles, sorted by subject
       - neural_path (str): the folder containing trained NNs to be evaluated
     Produce:
-      - grid with two columns and len(pos_class) rows, with PR | ROC plots. 
+      - grid with two rows and len(pos_class) columns, with ROC in top row, PR in bottom row.
         -- pos_class (list or int): which class should be considered "positive" for PR/ROC?
-           If a list, evaluates PR and ROC per class.
+            If a list, evaluates PR and ROC per class.
         Optionally, supports:
+        -- pos_class_name (str or list): column headers. 
+            If pos_class is an int, this should be a str, otherwise a list.
         -- title (str): for the title if not None
         -- label_names (list or dict): a list matching pos_class, or a dict if pos_class is int
         -- saving PDF to disk, if saveto is not None.
     
     Optional parameters:
       - with_time (bool, default True): does the NN set require a (None, 1) shaped time input?
-      - from_logits (bool, default False): the output of NN is in logits (True) or probabilities (False)
-        Useful for thresholds.
+      - from_logits (bool, default False): If True, output of NN is logits. False, output is probabilities/softmax. 
+      
     """
 
     import re
@@ -343,7 +345,8 @@ def pr_roc_from_path(
     # Get list of NNs we have trained. These are the only ones we can evalutate!
     nns = next(os.walk(neural_path))[-1]
     subs = [re.search("[0-9]*", nn).group(0) for nn in nns]
-    subs = [s for s in subs if s not in exclude]
+    if exclude is not None:
+        subs = [s for s in subs if s not in exclude]
 
     # Make all of the plots. 
     # We want to make an ROC and a PR plot for each class in pos_class.
